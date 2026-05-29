@@ -182,7 +182,9 @@ def count_all() -> int:
     try:
         r = requests.get(url, headers=h,
                          params={"select": "id", "limit": "1"}, timeout=15)
-        return int(r.headers.get("content-range", "0/0").split("/")[-1])
+        ct = r.headers.get("content-range", "0/0")
+        total = int(ct.split("/")[-1]) if "/" in ct else 0
+        return total
     except:
         return 0
 
@@ -263,7 +265,19 @@ with st.sidebar:
     # Status koneksi
     if SUPABASE_KEY:
         total = count_all()
-        st.success(f"✅ Supabase terhubung\n\n**{total:,}** total baris")
+        if total > 0:
+            st.success(f"✅ Supabase terhubung\n\n**{total:,}** total baris")
+        else:
+            st.warning(f"⚠️ Supabase terhubung tapi tabel `{TABLE_NAME}` kosong atau tidak ditemukan")
+            # Coba cek tabel lain
+            try:
+                r2 = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/",
+                    headers=sb_headers(), timeout=10
+                )
+                st.caption(f"Status: {r2.status_code}")
+            except Exception as e:
+                st.caption(f"Error: {e}")
     else:
         st.error("❌ SUPABASE_KEY belum diisi")
 
@@ -572,7 +586,7 @@ with tab3:
 
                 m1, m2, m3 = st.columns(3)
                 with m1:
-                    v = int(df_prov[c_unit].sum()) if c_unit else "N/A"
+                    v = int(df_prov[c_unit].sum()) if c_unit else 0
                     st.markdown(f'<div class="metric-card"><div class="metric-label">Total Unit</div><div class="metric-value">{v:,}</div></div>',
                                 unsafe_allow_html=True)
                 with m2:
@@ -580,7 +594,7 @@ with tab3:
                     st.markdown(f'<div class="metric-card"><div class="metric-label">Nilai Kredit</div><div class="metric-value">Rp {v:.1f}M</div><div class="metric-sub">Miliar</div></div>',
                                 unsafe_allow_html=True)
                 with m3:
-                    v = df_prov[c_kab].nunique() if c_kab else "N/A"
+                    v = df_prov[c_kab].nunique() if c_kab else 0
                     st.markdown(f'<div class="metric-card"><div class="metric-label">Kab/Kota</div><div class="metric-value">{v}</div></div>',
                                 unsafe_allow_html=True)
 
