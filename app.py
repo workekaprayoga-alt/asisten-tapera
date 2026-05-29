@@ -196,29 +196,42 @@ def count_total() -> int:
 
 @st.cache_data(ttl=600)
 def get_stats() -> dict:
-    """Ambil statistik ringkas untuk konteks AI."""
-    try:
-        # Sample kecil untuk stats
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}",
-            headers=sb_headers(),
-            params={"select": "bank,provinsi,tahun_akad,nilai_flpp", "limit": "5000"},
-            timeout=30
-        )
-        df = pd.DataFrame(r.json()) if r.ok else pd.DataFrame()
-        if df.empty:
-            return {}
-        stats = {
-            "banks": sorted(df["bank"].dropna().unique().tolist()) if "bank" in df else [],
-            "provinces": sorted(df["provinsi"].dropna().unique().tolist()) if "provinsi" in df else [],
-            "years": sorted(df["tahun_akad"].dropna().unique().tolist()) if "tahun_akad" in df else [],
-        }
-        if "nilai_flpp" in df:
-            df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
-            stats["avg_nilai"] = df["nilai_flpp"].mean()
-        return stats
-    except:
-        return {}
+    """Ambil statistik lengkap — query distinct per kolom supaya akurat."""
+    base = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    h = sb_headers()
+    stats = {}
+
+    def fetch_col(col, order=None, limit=3000):
+        try:
+            params = {"select": col, "limit": str(limit)}
+            if order:
+                params["order"] = order
+            r = requests.get(base, headers=h, params=params, timeout=20)
+            if r.ok:
+                df = pd.DataFrame(r.json())
+                if col in df.columns:
+                    return df[col].dropna().unique().tolist()
+        except:
+            pass
+        return []
+
+    # Bank
+    stats["banks"] = sorted(fetch_col("bank", limit=500))
+
+    # Provinsi
+    stats["provinces"] = sorted(fetch_col("provinsi", limit=500))
+
+    # Tahun — ambil dari awal DAN akhir data supaya dapat semua rentang
+    years_set = set()
+    for direction in ["tahun_akad.asc", "tahun_akad.desc"]:
+        vals = fetch_col("tahun_akad", order=direction, limit=3000)
+        years_set.update([int(v) for v in vals if str(v).isdigit()])
+    for direction in ["tahun_realisasi.asc", "tahun_realisasi.desc"]:
+        vals = fetch_col("tahun_realisasi", order=direction, limit=3000)
+        years_set.update([int(v) for v in vals if str(v).isdigit()])
+    stats["years"] = sorted(years_set)
+
+    return stats
 
 def query_data(select="*", filters=None, limit=2000, order=None) -> pd.DataFrame:
     params = {"select": select, "limit": str(limit)}
