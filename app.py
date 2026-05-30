@@ -1,78 +1,50 @@
-"""
-test_data.py  —  Test Suite: Kemampuan AI Membaca Data FLPP
-Jalankan terpisah di Streamlit: streamlit run test_data.py
-Pastikan secrets.toml sudah ada (SUPABASE_URL, SUPABASE_KEY, GROQ_KEY)
-"""
-
 import streamlit as st
 import pandas as pd
 import requests
 import json
-import re
 import time
 from datetime import datetime
 
 # ============================================================
 # KONFIGURASI
 # ============================================================
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://wsknzpurkujhyzdoiffh.supabase.co")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
-GROQ_KEY     = st.secrets.get("GROQ_KEY", "")
+DEEPSEEK_KEY = st.secrets.get("DEEPSEEK_KEY", "")
 TABLE_NAME   = "realisasi"
 
-SCHEMA = {
-    "id": "integer primary key",
-    "tahun_akad": "integer, tahun akad kredit",
-    "tahun_realisasi": "integer, tahun realisasi pencairan",
-    "bank": "text, nama bank pelaksana FLPP",
-    "asosiasi": "text, nama asosiasi pengembang",
-    "jenis_rumah": "text, jenis/tipe rumah",
-    "provinsi": "text, nama provinsi HURUF KAPITAL",
-    "kabupaten": "text, nama kabupaten atau kota",
-    "kecamatan": "text, nama kecamatan",
-    "kelurahan": "text, nama kelurahan/desa",
-    "kelamin": "text, jenis kelamin pembeli (L/P)",
-    "pekerjaan": "text, pekerjaan pembeli",
-    "penghasilan": "numeric, penghasilan bulanan rupiah",
-    "nama_pengembang": "text, nama perusahaan pengembang",
-    "nama_perumahan": "text, nama perumahan/cluster",
-    "luas_bangunan": "numeric, luas bangunan m2",
-    "luas_tanah": "numeric, luas tanah m2",
-    "harga_rumah": "numeric, harga jual rumah rupiah",
-    "tenor": "integer, jangka waktu KPR tahun",
-    "suku_bunga_kpr": "numeric, suku bunga KPR persen",
-    "nilai_flpp": "numeric, nilai kredit FLPP rupiah",
-    "tgl_akad": "date, tanggal akad kredit",
-    "tanggal_pencairan": "date, tanggal pencairan",
-}
-
 st.set_page_config(
-    page_title="Test Suite — AI FLPP Data",
+    page_title="Test Suite — Asisten AI Tapera",
     page_icon="🧪",
     layout="wide",
-    initial_sidebar_state="collapsed",
 )
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.stApp { background: #0f1117; }
-.pass  { background: #052e16; border: 1px solid #166534; border-radius: 8px; padding: 12px 16px; margin: 6px 0; }
-.fail  { background: #450a0a; border: 1px solid #991b1b; border-radius: 8px; padding: 12px 16px; margin: 6px 0; }
-.warn  { background: #1c1917; border: 1px solid #92400e; border-radius: 8px; padding: 12px 16px; margin: 6px 0; }
-.skip  { background: #1e1b4b; border: 1px solid #4338ca; border-radius: 8px; padding: 12px 16px; margin: 6px 0; }
-.q-label { color: #94a3b8; font-size: 12px; margin-bottom: 4px; }
-.q-text  { color: #e2e8f0; font-size: 14px; font-weight: 500; margin-bottom: 8px; }
-.answer  { color: #cbd5e1; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
-.stat-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 16px; text-align: center; }
-.stat-n   { color: #38bdf8; font-size: 28px; font-weight: 700; }
-.stat-l   { color: #64748b; font-size: 12px; margin-top: 2px; }
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono:wght@400&display=swap');
+html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif; }
+.stApp { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); }
+.pass-card  { background:#052e16; border:1px solid #16a34a; border-radius:8px; padding:12px 16px; margin:4px 0; }
+.fail-card  { background:#450a0a; border:1px solid #dc2626; border-radius:8px; padding:12px 16px; margin:4px 0; }
+.warn-card  { background:#422006; border:1px solid #d97706; border-radius:8px; padding:12px 16px; margin:4px 0; }
+.skip-card  { background:#1e293b; border:1px solid #475569; border-radius:8px; padding:12px 16px; margin:4px 0; }
+.test-id    { font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; color:#94a3b8; }
+.test-q     { font-size:14px; font-weight:600; color:#e2e8f0; margin: 2px 0; }
+.test-rows  { font-size:12px; color:#64748b; }
+.test-sum   { font-size:13px; color:#94a3b8; font-family:'JetBrains Mono',monospace; white-space:pre-wrap; }
+.test-ai    { font-size:13px; color:#93c5fd; margin-top:6px; }
+.test-err   { font-size:12px; color:#f87171; }
+.cat-header { color:#38bdf8; font-size:16px; font-weight:700; margin:24px 0 8px 0;
+              padding:8px 0; border-bottom:2px solid #1e3a5f; }
+.summary-box{ background:#1e293b; border:1px solid #334155; border-radius:12px;
+              padding:20px; margin:16px 0; text-align:center; }
+.big-num    { font-size:32px; font-weight:800; color:#38bdf8; }
+.big-label  { font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:1px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# HELPERS
+# SUPABASE HELPERS
 # ============================================================
 def sb_headers():
     return {
@@ -81,783 +53,857 @@ def sb_headers():
         "Content-Type": "application/json",
     }
 
-@st.cache_data(ttl=3600)
 def count_total() -> int:
-    h = sb_headers(); h["Prefer"] = "count=exact"
+    h = sb_headers()
+    h["Prefer"] = "count=exact"
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}",
-            headers=h, params={"select": "id", "limit": "1"}, timeout=20
+            headers=h, params={"select": "id", "limit": "1"}, timeout=15
         )
-        ct = r.headers.get("content-range", "")
+        ct = r.headers.get("content-range", "0/0")
         return int(ct.split("/")[-1]) if "/" in ct else 0
     except:
         return 0
 
-@st.cache_data(ttl=3600)
-def get_stats():
-    base = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+def fetch_agg(group_col: str, filter_col: str = None,
+              filter_val: str = None, top_n: int = 30) -> pd.DataFrame:
+    """COUNT(*) GROUP BY dengan pagination sampai 200k baris."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
     h = sb_headers()
-    def fetch_unique(col, limit=2000):
-        result = set()
-        for direction in [f"{col}.asc", f"{col}.desc"]:
-            try:
-                r = requests.get(base, headers=h,
-                    params={"select": col, "order": direction, "limit": str(limit)}, timeout=25)
-                if r.ok and isinstance(r.json(), list):
-                    vals = pd.DataFrame(r.json())[col].dropna().unique().tolist()
-                    result.update(vals)
-            except: pass
-        return sorted(result)
-    banks   = fetch_unique("bank", 200)
-    provs   = fetch_unique("provinsi", 200)
-    years_r = fetch_unique("tahun_akad", 2000) + fetch_unique("tahun_realisasi", 2000)
-    years   = sorted({int(y) for y in years_r if str(y).lstrip("-").isdigit() and 2000 < int(y) < 2100})
-    return {"banks": banks, "provinces": provs, "years": years}
+    params = {"select": group_col}
+    if filter_col and filter_val:
+        params[filter_col] = f"eq.{filter_val}"
 
-def query_supabase(select="*", filters=None, order=None, limit=10000):
-    PAGE_SIZE = 1000
-    all_data, offset, remaining = [], 0, min(limit, 50000)
-    while remaining > 0:
-        fetch = min(PAGE_SIZE, remaining)
-        params = {"select": select, "limit": str(fetch), "offset": str(offset)}
-        if filters:
-            for k, v in filters.items():
-                if v and str(v).strip(): params[k] = str(v)
-        if order and str(order).strip() not in ["", "null", "None"]:
-            params["order"] = order
+    all_data = []
+    offset = 0
+    batch = 10000
+    while True:
+        p = {**params, "limit": str(batch), "offset": str(offset)}
         try:
-            r = requests.get(f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}",
-                             headers=sb_headers(), params=params, timeout=45)
-            if not r.ok: break
-            page = r.json()
-            if not isinstance(page, list) or not page: break
-            all_data.extend(page)
-            if len(page) < fetch: break
-            offset += fetch; remaining -= fetch
-        except: break
-    return pd.DataFrame(all_data) if all_data else pd.DataFrame()
+            r = requests.get(url, headers=h, params=p, timeout=30)
+            r.raise_for_status()
+            chunk = r.json()
+            if not chunk: break
+            all_data.extend(chunk)
+            if len(chunk) < batch: break
+            offset += batch
+            if offset >= 200000: break
+        except:
+            break
 
-def call_groq(messages, temperature=0.3, max_tokens=800):
-    if not GROQ_KEY: return "⚠️ GROQ_KEY tidak ada"
+    if not all_data:
+        return pd.DataFrame()
+    df = pd.DataFrame(all_data)
+    if group_col not in df.columns:
+        return pd.DataFrame()
+    result = df[group_col].value_counts().nlargest(top_n).reset_index()
+    result.columns = [group_col, "jumlah"]
+    return result
+
+def fetch_numeric_stats(col: str, group_col: str = None,
+                        filter_col: str = None, filter_val: str = None,
+                        limit: int = 50000) -> pd.DataFrame:
+    """Ambil kolom numerik + opsional group_col untuk statistik."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    h = sb_headers()
+    select = f"{col},{group_col}" if group_col else col
+    params = {"select": select, "limit": str(limit)}
+    if filter_col and filter_val:
+        params[filter_col] = f"eq.{filter_val}"
+    try:
+        r = requests.get(url, headers=h, params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        return pd.DataFrame(data) if data else pd.DataFrame()
+    except:
+        return pd.DataFrame()
+
+def fetch_multi_group(col1: str, col2: str, limit: int = 100000) -> pd.DataFrame:
+    """Ambil 2 kolom untuk groupby kombinasi."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    h = sb_headers()
+    params = {"select": f"{col1},{col2}", "limit": str(limit)}
+    try:
+        r = requests.get(url, headers=h, params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        return pd.DataFrame(data) if data else pd.DataFrame()
+    except:
+        return pd.DataFrame()
+
+def fetch_tren(filter_col: str = None, filter_val: str = None) -> pd.DataFrame:
+    """Tren per tahun_akad."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    h = sb_headers()
+    params = {"select": "tahun_akad", "limit": "200000"}
+    if filter_col and filter_val:
+        params[filter_col] = f"eq.{filter_val}"
+    all_data = []
+    offset = 0
+    while True:
+        p = {**params, "offset": str(offset)}
+        try:
+            r = requests.get(url, headers=h, params=p, timeout=30)
+            r.raise_for_status()
+            chunk = r.json()
+            if not chunk: break
+            all_data.extend(chunk)
+            if len(chunk) < 10000: break
+            offset += 10000
+        except:
+            break
+    if not all_data:
+        return pd.DataFrame()
+    df = pd.DataFrame(all_data)
+    result = df["tahun_akad"].value_counts().sort_index().reset_index()
+    result.columns = ["Tahun", "Unit"]
+    return result
+
+def tanya_deepseek(prompt: str) -> str:
+    if not DEEPSEEK_KEY:
+        return "—"
     try:
         r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "messages": messages,
-                  "temperature": temperature, "max_tokens": max_tokens},
-            timeout=60
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {DEEPSEEK_KEY}",
+                     "Content-Type": "application/json"},
+            json={"model": "deepseek-chat",
+                  "messages": [
+                      {"role": "system", "content":
+                       "Kamu analis data FLPP. Jawab singkat dan akurat dalam bahasa Indonesia. "
+                       "Maksimal 3 kalimat. Langsung ke angka dan fakta."},
+                      {"role": "user", "content": prompt}
+                  ],
+                  "temperature": 0.2, "max_tokens": 300},
+            timeout=30
         )
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"❌ Error: {e}"
+        return f"Error: {e}"
 
 # ============================================================
-# TEST CASES — 35 pertanyaan dalam 7 kategori
+# TEST DEFINITIONS
+# Setiap test: {id, kategori, pertanyaan, fn}
+# fn() -> (ringkasan_str, n_rows, detail_df_or_None)
 # ============================================================
-TEST_CASES = [
-    # ── A: Angka Dasar ────────────────────────────────────────
-    {
-        "id": "A1", "cat": "A. Angka Dasar",
-        "question": "Berapa total unit FLPP yang sudah terealisasi?",
-        "type": "count_total",
-        "expect_contains": ["997", "unit"],
-        "data_fn": lambda df, total, stats: {"result": total, "label": f"{total:,} unit"}
-    },
-    {
-        "id": "A2", "cat": "A. Angka Dasar",
-        "question": "Berapa total nilai FLPP (rupiah) secara keseluruhan?",
-        "type": "aggregate",
-        "select": "nilai_flpp", "limit": 20000,
-        "expect_non_empty": True,
-        "expect_numeric": "nilai_flpp"
-    },
-    {
-        "id": "A3", "cat": "A. Angka Dasar",
-        "question": "Data tersedia dari tahun berapa sampai tahun berapa?",
-        "type": "stats",
-        "expect_contains_stat": "years"
-    },
-    {
-        "id": "A4", "cat": "A. Angka Dasar",
-        "question": "Ada berapa bank pelaksana FLPP dalam data ini?",
-        "type": "stats",
-        "expect_contains_stat": "banks"
-    },
-    {
-        "id": "A5", "cat": "A. Angka Dasar",
-        "question": "Berapa jumlah provinsi yang tercatat dalam data?",
-        "type": "stats",
-        "expect_contains_stat": "provinces"
-    },
+def run_A1():
+    n = count_total()
+    return f"Total: {n:,} unit", n, None
 
-    # ── B: Ranking & Top-N ────────────────────────────────────
-    {
-        "id": "B1", "cat": "B. Ranking & Top-N",
-        "question": "Provinsi mana yang paling banyak unit FLPP?",
-        "select": "provinsi", "limit": 30000, "type": "ranking",
-        "group_col": "provinsi",
-        "expect_top_n": 5
-    },
-    {
-        "id": "B2", "cat": "B. Ranking & Top-N",
-        "question": "10 kabupaten/kota dengan realisasi FLPP terbanyak?",
-        "select": "kabupaten,provinsi", "limit": 30000, "type": "ranking",
-        "group_col": "kabupaten",
-        "expect_top_n": 10
-    },
-    {
-        "id": "B3", "cat": "B. Ranking & Top-N",
-        "question": "Pengembang mana yang paling produktif secara nasional?",
-        "select": "nama_pengembang,provinsi", "limit": 30000, "type": "ranking",
-        "group_col": "nama_pengembang",
-        "expect_top_n": 10
-    },
-    {
-        "id": "B4", "cat": "B. Ranking & Top-N",
-        "question": "Perumahan mana yang paling banyak unit terealisasi?",
-        "select": "nama_perumahan,kabupaten,provinsi", "limit": 30000, "type": "ranking",
-        "group_col": "nama_perumahan",
-        "expect_top_n": 10
-    },
-    {
-        "id": "B5", "cat": "B. Ranking & Top-N",
-        "question": "Bank mana yang paling aktif dalam pembiayaan FLPP?",
-        "select": "bank,nilai_flpp", "limit": 30000, "type": "ranking",
-        "group_col": "bank",
-        "expect_top_n": 5
-    },
-    {
-        "id": "B6", "cat": "B. Ranking & Top-N",
-        "question": "10 perumahan dengan realisasi terbanyak tahun 2023",
-        "select": "nama_perumahan,kabupaten,provinsi", "limit": 30000, "type": "ranking",
-        "filters": {"tahun_akad": "eq.2023"},
-        "group_col": "nama_perumahan",
-        "expect_top_n": 10,
-        "expect_filtered": True
-    },
-    {
-        "id": "B7", "cat": "B. Ranking & Top-N",
-        "question": "Top 5 pengembang di Jawa Barat",
-        "select": "nama_pengembang,kabupaten", "limit": 20000, "type": "ranking",
-        "filters": {"provinsi": "eq.JAWA BARAT"},
-        "group_col": "nama_pengembang",
-        "expect_top_n": 5,
-        "expect_filtered": True
-    },
+def run_A2():
+    df = fetch_numeric_stats("nilai_flpp", limit=200000)
+    if df.empty or "nilai_flpp" not in df.columns:
+        return "FAIL: kolom nilai_flpp tidak ada", 0, None
+    df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
+    total = df["nilai_flpp"].sum()
+    avg   = df["nilai_flpp"].mean()
+    return f"Total: Rp {total/1e12:.2f} T\nRata-rata per unit: Rp {avg:,.0f}", len(df), None
 
-    # ── C: Filter & Spesifik ──────────────────────────────────
-    {
-        "id": "C1", "cat": "C. Filter & Spesifik",
-        "question": "Berapa unit FLPP di Jawa Barat?",
-        "select": "id", "limit": 1,
-        "type": "count_filter",
-        "filters": {"provinsi": "eq.JAWA BARAT"},
-        "expect_non_zero": True
-    },
-    {
-        "id": "C2", "cat": "C. Filter & Spesifik",
-        "question": "Berapa unit FLPP di tahun 2023?",
-        "select": "id", "limit": 1,
-        "type": "count_filter",
-        "filters": {"tahun_akad": "eq.2023"},
-        "expect_non_zero": True
-    },
-    {
-        "id": "C3", "cat": "C. Filter & Spesifik",
-        "question": "Berapa unit FLPP yang dibiayai BTN?",
-        "select": "bank", "limit": 10000, "type": "filter_data",
-        "filters": None,  # Bank name varies, detect from stats
-        "expect_non_empty": True,
-        "special": "detect_btn"
-    },
-    {
-        "id": "C4", "cat": "C. Filter & Spesifik",
-        "question": "Perumahan apa saja yang ada di Sumatera Utara?",
-        "select": "nama_perumahan,kabupaten", "limit": 5000, "type": "filter_data",
-        "filters": {"provinsi": "eq.SUMATERA UTARA"},
-        "expect_non_empty": True
-    },
-    {
-        "id": "C5", "cat": "C. Filter & Spesifik",
-        "question": "Pengembang aktif di Kalimantan Timur",
-        "select": "nama_pengembang,kabupaten", "limit": 5000, "type": "filter_data",
-        "filters": {"provinsi": "eq.KALIMANTAN TIMUR"},
-        "expect_non_empty": True
-    },
-    {
-        "id": "C6", "cat": "C. Filter & Spesifik",
-        "question": "Distribusi unit FLPP di provinsi Banten",
-        "select": "kabupaten,nama_pengembang", "limit": 10000, "type": "ranking",
-        "filters": {"provinsi": "eq.BANTEN"},
-        "group_col": "kabupaten",
-        "expect_top_n": 5
-    },
+def run_A3():
+    df = fetch_tren()
+    if df.empty:
+        return "FAIL: tidak ada data tahun", 0, None
+    tahun_list = sorted(df["Tahun"].dropna().unique().tolist())
+    return f"Rentang tahun: {tahun_list[0]}–{tahun_list[-1]}\nTahun tersedia: {', '.join(str(t) for t in tahun_list)}", len(df), df
 
-    # ── D: Tren & Waktu ───────────────────────────────────────
-    {
-        "id": "D1", "cat": "D. Tren & Waktu",
-        "question": "Tren realisasi FLPP per tahun dari awal sampai sekarang",
-        "select": "tahun_akad", "limit": 30000, "type": "trend",
-        "group_col": "tahun_akad",
-        "expect_multi_years": True
-    },
-    {
-        "id": "D2", "cat": "D. Tren & Waktu",
-        "question": "Tahun mana yang paling banyak realisasinya?",
-        "select": "tahun_akad", "limit": 30000, "type": "trend",
-        "group_col": "tahun_akad",
-        "expect_multi_years": True
-    },
-    {
-        "id": "D3", "cat": "D. Tren & Waktu",
-        "question": "Apakah realisasi FLPP naik atau turun dari 2022 ke 2024?",
-        "select": "tahun_akad", "limit": 30000, "type": "trend",
-        "group_col": "tahun_akad",
-        "expect_multi_years": True
-    },
-    {
-        "id": "D4", "cat": "D. Tren & Waktu",
-        "question": "Berapa unit FLPP per tahun yang dibiayai BTN?",
-        "select": "tahun_akad,bank", "limit": 20000, "type": "trend",
-        "group_col": "tahun_akad",
-        "special": "detect_btn_trend"
-    },
+def run_A4():
+    df = fetch_agg("bank", top_n=20)
+    if df.empty:
+        return "FAIL: tidak ada data bank", 0, None
+    banks = df["bank"].tolist()
+    return f"{len(banks)} bank: {', '.join(banks[:5])}{'...' if len(banks)>5 else ''}", len(df), df
 
-    # ── E: Profil Pembeli ─────────────────────────────────────
-    {
-        "id": "E1", "cat": "E. Profil Pembeli",
-        "question": "Berapa persen pembeli laki-laki vs perempuan?",
-        "select": "kelamin", "limit": 20000, "type": "distribution",
-        "group_col": "kelamin",
-        "expect_top_n": 2
-    },
-    {
-        "id": "E2", "cat": "E. Profil Pembeli",
-        "question": "Pekerjaan apa yang paling banyak membeli rumah FLPP?",
-        "select": "pekerjaan", "limit": 20000, "type": "distribution",
-        "group_col": "pekerjaan",
-        "expect_top_n": 5
-    },
-    {
-        "id": "E3", "cat": "E. Profil Pembeli",
-        "question": "Berapa rata-rata penghasilan pembeli rumah FLPP?",
-        "select": "penghasilan", "limit": 20000, "type": "stats_numeric",
-        "num_col": "penghasilan"
-    },
-    {
-        "id": "E4", "cat": "E. Profil Pembeli",
-        "question": "Tenor KPR berapa tahun yang paling banyak dipilih?",
-        "select": "tenor", "limit": 20000, "type": "distribution",
-        "group_col": "tenor",
-        "expect_top_n": 3
-    },
-    {
-        "id": "E5", "cat": "E. Profil Pembeli",
-        "question": "Berapa rata-rata harga rumah FLPP yang dibeli?",
-        "select": "harga_rumah,jenis_rumah", "limit": 20000, "type": "stats_numeric",
-        "num_col": "harga_rumah"
-    },
+def run_A5():
+    df = fetch_agg("provinsi", top_n=50)
+    if df.empty:
+        return "FAIL: tidak ada data provinsi", 0, None
+    return f"{len(df)} provinsi terdeteksi\nContoh: {', '.join(df['provinsi'].tolist()[:5])}", len(df), df
 
-    # ── F: Finansial ──────────────────────────────────────────
-    {
-        "id": "F1", "cat": "F. Harga & Nilai",
-        "question": "Berapa kisaran harga rumah FLPP (minimum dan maksimum)?",
-        "select": "harga_rumah,provinsi", "limit": 20000, "type": "stats_numeric",
-        "num_col": "harga_rumah"
-    },
-    {
-        "id": "F2", "cat": "F. Harga & Nilai",
-        "question": "Berapa rata-rata nilai kredit FLPP per unit?",
-        "select": "nilai_flpp,bank", "limit": 20000, "type": "stats_numeric",
-        "num_col": "nilai_flpp"
-    },
-    {
-        "id": "F3", "cat": "F. Harga & Nilai",
-        "question": "Provinsi mana yang rata-rata harga rumahnya paling tinggi?",
-        "select": "harga_rumah,provinsi", "limit": 20000, "type": "agg_numeric",
-        "group_col": "provinsi", "num_col": "harga_rumah", "agg": "mean"
-    },
-    {
-        "id": "F4", "cat": "F. Harga & Nilai",
-        "question": "Berapa total nilai kredit FLPP yang disalurkan?",
-        "select": "nilai_flpp,bank,tahun_akad", "limit": 20000, "type": "stats_numeric",
-        "num_col": "nilai_flpp"
-    },
-    {
-        "id": "F5", "cat": "F. Harga & Nilai",
-        "question": "Bagaimana distribusi harga rumah FLPP?",
-        "select": "harga_rumah,jenis_rumah", "limit": 20000, "type": "stats_numeric",
-        "num_col": "harga_rumah"
-    },
+def run_A6():
+    df = fetch_numeric_stats("harga_rumah", limit=50000)
+    if df.empty or "harga_rumah" not in df.columns:
+        return "FAIL: kolom harga_rumah kosong", 0, None
+    df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce").dropna()
+    vmin = df["harga_rumah"].min()
+    vmax = df["harga_rumah"].max()
+    vavg = df["harga_rumah"].mean()
+    if pd.isna(vmin):
+        return "FAIL: semua nilai harga_rumah null", len(df), None
+    return f"Min: Rp {vmin:,.0f}\nMax: Rp {vmax:,.0f}\nRata-rata: Rp {vavg:,.0f}", len(df), None
 
-    # ── G: Kombinasi & Analitik ───────────────────────────────
-    {
-        "id": "G1", "cat": "G. Kombinasi & Analitik",
-        "question": "Bank mana yang dominan di setiap provinsi?",
-        "select": "bank,provinsi", "limit": 30000, "type": "cross_tab",
-        "group_col": "provinsi", "sub_col": "bank"
-    },
-    {
-        "id": "G2", "cat": "G. Kombinasi & Analitik",
-        "question": "Pengembang mana yang paling aktif di tahun 2023?",
-        "select": "nama_pengembang,provinsi", "limit": 20000, "type": "ranking",
-        "filters": {"tahun_akad": "eq.2023"},
-        "group_col": "nama_pengembang",
-        "expect_top_n": 10,
-        "expect_filtered": True
-    },
-    {
-        "id": "G3", "cat": "G. Kombinasi & Analitik",
-        "question": "Jenis rumah apa yang paling banyak dibiayai FLPP?",
-        "select": "jenis_rumah,harga_rumah", "limit": 20000, "type": "distribution",
-        "group_col": "jenis_rumah",
-        "expect_top_n": 5
-    },
-    {
-        "id": "G4", "cat": "G. Kombinasi & Analitik",
-        "question": "Asosiasi pengembang mana yang paling aktif?",
-        "select": "asosiasi,provinsi", "limit": 20000, "type": "ranking",
-        "group_col": "asosiasi",
-        "expect_top_n": 5
-    },
-    {
-        "id": "G5", "cat": "G. Kombinasi & Analitik",
-        "question": "Perbandingan realisasi FLPP antara Jawa dan luar Jawa",
-        "select": "provinsi", "limit": 30000, "type": "distribution",
-        "group_col": "provinsi",
-        "expect_top_n": 10
-    },
+def run_A7():
+    df = fetch_agg("jenis_rumah", top_n=10)
+    if df.empty:
+        return "FAIL: tidak ada data jenis_rumah", 0, None
+    return "\n".join(f"  {i+1}. {r['jenis_rumah']}: {r['jumlah']:,}" for i,r in df.iterrows()), len(df), df
+
+def run_B1():
+    df = fetch_agg("provinsi", top_n=38)
+    if df.empty:
+        return "FAIL", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['provinsi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 provinsi:\n{top5}", len(df), df
+
+def run_B2():
+    df = fetch_agg("kabupaten", top_n=20)
+    if df.empty:
+        return "FAIL", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 kabupaten:\n{top10}", len(df), df
+
+def run_B3():
+    df = fetch_agg("nama_pengembang", top_n=20)
+    if df.empty:
+        return "FAIL", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 pengembang:\n{top10}", len(df), df
+
+def run_B4():
+    df = fetch_agg("nama_perumahan", top_n=20)
+    if df.empty:
+        return "FAIL", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 perumahan:\n{top10}", len(df), df
+
+def run_B5():
+    df = fetch_agg("bank", top_n=10)
+    if df.empty:
+        return "FAIL", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['bank']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 bank:\n{top5}", len(df), df
+
+def run_B6():
+    df = fetch_agg("nama_perumahan", "tahun_akad", "2023", top_n=20)
+    if df.empty:
+        return "FAIL: tidak ada data 2023", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 perumahan terbanyak 2023:\n{top10}", len(df), df
+
+def run_B7():
+    df = fetch_agg("nama_pengembang", "provinsi", "JAWA BARAT", top_n=10)
+    if df.empty:
+        return "FAIL: tidak ada data Jawa Barat", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 pengembang Jawa Barat:\n{top5}", len(df), df
+
+def run_B8():
+    df = fetch_agg("asosiasi", top_n=10)
+    if df.empty:
+        return "FAIL", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['asosiasi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 asosiasi:\n{top5}", len(df), df
+
+def run_B9():
+    df = fetch_agg("kabupaten", "provinsi", "JAWA TIMUR", top_n=10)
+    if df.empty:
+        return "FAIL: tidak ada data Jawa Timur", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 kabupaten Jawa Timur:\n{top10}", len(df), df
+
+def run_B10():
+    df = fetch_agg("nama_pengembang", "tahun_akad", "2024", top_n=10)
+    if df.empty:
+        return "FAIL: tidak ada data 2024", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 pengembang 2024:\n{top5}", len(df), df
+
+def run_C1():
+    df = fetch_agg("provinsi", top_n=50)
+    if df.empty or "JAWA BARAT" not in df["provinsi"].values:
+        return "FAIL: Jawa Barat tidak ditemukan", 0, None
+    n = df[df["provinsi"] == "JAWA BARAT"]["jumlah"].values[0]
+    total = df["jumlah"].sum()
+    pct = n / total * 100
+    return f"Jawa Barat: {n:,} unit ({pct:.1f}% dari total {total:,})", n, None
+
+def run_C2():
+    df_tren = fetch_tren()
+    if df_tren.empty:
+        return "FAIL: tidak ada data tahun", 0, None
+    r2023 = df_tren[df_tren["Tahun"] == 2023]
+    n = int(r2023["Unit"].values[0]) if not r2023.empty else 0
+    return f"Unit FLPP tahun 2023: {n:,}", n, df_tren
+
+def run_C3():
+    df = fetch_agg("bank", top_n=20)
+    if df.empty:
+        return "FAIL: tidak ada data bank", 0, None
+    btn_row = df[df["bank"].str.contains("BTN", case=False, na=False)]
+    if btn_row.empty:
+        return "BTN tidak ditemukan, nama bank tersedia:\n" + \
+               "\n".join(f"  - {b}" for b in df["bank"].head(8).tolist()), 0, df
+    n = btn_row["jumlah"].sum()
+    total = df["jumlah"].sum()
+    return f"BTN: {n:,} unit ({n/total*100:.1f}% dari total)", n, None
+
+def run_C4():
+    df = fetch_agg("nama_perumahan", "provinsi", "SUMATERA UTARA", top_n=30)
+    if df.empty:
+        return "FAIL: tidak ada data Sumatera Utara", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 perumahan di Sumatera Utara:\n{top10}", len(df), df
+
+def run_C5():
+    df = fetch_agg("nama_pengembang", "provinsi", "KALIMANTAN TIMUR", top_n=20)
+    if df.empty:
+        return "FAIL: tidak ada data Kalimantan Timur", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 pengembang Kalimantan Timur:\n{top5}", len(df), df
+
+def run_C6():
+    df = fetch_agg("kabupaten", "provinsi", "BANTEN", top_n=20)
+    if df.empty:
+        return "FAIL: tidak ada data Banten", 0, None
+    s = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.iterrows())
+    return f"Distribusi Banten:\n{s}", len(df), df
+
+def run_C7():
+    df = fetch_agg("nama_perumahan", "bank", "BANK BTN", top_n=20)
+    if df.empty:
+        # coba nama lain
+        df = fetch_agg("nama_perumahan", "bank", "BTN", top_n=20)
+    if df.empty:
+        return "FAIL: data perumahan BTN tidak ditemukan", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 perumahan dibiayai BTN:\n{top10}", len(df), df
+
+def run_C8():
+    df = fetch_agg("provinsi", "tahun_akad", "2022", top_n=10)
+    if df.empty:
+        return "FAIL: tidak ada data 2022", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['provinsi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 provinsi tahun 2022:\n{top5}", len(df), df
+
+def run_C9():
+    df = fetch_agg("kabupaten", "tahun_akad", "2024", top_n=20)
+    if df.empty:
+        return "FAIL: tidak ada data 2024", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 kabupaten 2024:\n{top10}", len(df), df
+
+def run_C10():
+    df = fetch_agg("nama_perumahan", "provinsi", "SULAWESI SELATAN", top_n=20)
+    if df.empty:
+        return "FAIL: tidak ada data Sulawesi Selatan", 0, None
+    top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
+    return f"Top 10 perumahan di Sulawesi Selatan:\n{top10}", len(df), df
+
+def run_D1():
+    df = fetch_tren()
+    if df.empty:
+        return "FAIL: tidak ada data tren", 0, None
+    s = "\n".join(f"  {r['Tahun']}: {r['Unit']:,}" for _,r in df.iterrows())
+    return f"Tren per tahun:\n{s}", len(df), df
+
+def run_D2():
+    df = fetch_tren()
+    if df.empty:
+        return "FAIL", 0, None
+    best = df.loc[df["Unit"].idxmax()]
+    return f"Tahun terbanyak: {int(best['Tahun'])} dengan {int(best['Unit']):,} unit", len(df), df
+
+def run_D3():
+    df = fetch_tren()
+    if df.empty or len(df) < 2:
+        return "FAIL: data tren kurang", 0, None
+    df = df.sort_values("Tahun")
+    results = []
+    for i in range(1, len(df)):
+        prev = df.iloc[i-1]
+        curr = df.iloc[i]
+        delta = curr["Unit"] - prev["Unit"]
+        pct = delta / prev["Unit"] * 100
+        trend = "📈" if delta > 0 else "📉"
+        results.append(f"  {trend} {int(prev['Tahun'])}→{int(curr['Tahun'])}: {delta:+,} ({pct:+.1f}%)")
+    return "Perubahan YoY:\n" + "\n".join(results), len(df), df
+
+def run_D4():
+    df_tren = fetch_tren()
+    if df_tren.empty:
+        return "FAIL", 0, None
+    r2022 = df_tren[df_tren["Tahun"] == 2022]
+    r2024 = df_tren[df_tren["Tahun"] == 2024]
+    n2022 = int(r2022["Unit"].values[0]) if not r2022.empty else 0
+    n2024 = int(r2024["Unit"].values[0]) if not r2024.empty else 0
+    delta = n2024 - n2022
+    pct = delta / n2022 * 100 if n2022 else 0
+    trend = "📈 NAIK" if delta > 0 else "📉 TURUN"
+    return f"{trend}\n2022: {n2022:,} unit\n2024: {n2024:,} unit\nDelta: {delta:+,} ({pct:+.1f}%)", 2, None
+
+def run_D5():
+    df = fetch_tren("provinsi", "JAWA BARAT")
+    if df.empty:
+        return "FAIL: tidak ada data Jawa Barat per tahun", 0, None
+    s = "\n".join(f"  {r['Tahun']}: {r['Unit']:,}" for _,r in df.iterrows())
+    return f"Tren Jawa Barat per tahun:\n{s}", len(df), df
+
+def run_D6():
+    df = fetch_tren("bank", "BANK BTN")
+    if df.empty:
+        # coba nama singkat
+        df = fetch_tren("bank", "BTN")
+    if df.empty:
+        return "WARN: data BTN per tahun tidak ditemukan", 0, None
+    s = "\n".join(f"  {r['Tahun']}: {r['Unit']:,}" for _,r in df.iterrows())
+    return f"Tren BTN per tahun:\n{s}", len(df), df
+
+def run_E1():
+    df = fetch_agg("kelamin", top_n=5)
+    if df.empty:
+        return "FAIL: tidak ada data kelamin", 0, None
+    total = df["jumlah"].sum()
+    s = "\n".join(f"  {r['kelamin']}: {r['jumlah']:,} ({r['jumlah']/total*100:.1f}%)" for _,r in df.iterrows())
+    return f"Distribusi gender:\n{s}", len(df), df
+
+def run_E2():
+    df = fetch_agg("pekerjaan", top_n=10)
+    if df.empty:
+        return "FAIL: tidak ada data pekerjaan", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['pekerjaan']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 pekerjaan pembeli:\n{top5}", len(df), df
+
+def run_E3():
+    df = fetch_numeric_stats("penghasilan", limit=50000)
+    if df.empty or "penghasilan" not in df.columns:
+        return "FAIL: kolom penghasilan tidak ada", 0, None
+    df["penghasilan"] = pd.to_numeric(df["penghasilan"], errors="coerce")
+    if df["penghasilan"].isna().all():
+        return "WARN: semua nilai penghasilan null", len(df), None
+    avg = df["penghasilan"].mean()
+    med = df["penghasilan"].median()
+    return f"Rata-rata: Rp {avg:,.0f}\nMedian: Rp {med:,.0f}", len(df), None
+
+def run_E4():
+    df = fetch_agg("tenor", top_n=10)
+    if df.empty:
+        return "FAIL: tidak ada data tenor", 0, None
+    total = df["jumlah"].sum()
+    s = "\n".join(f"  {r['tenor']} bln ({r['tenor']//12} thn): {r['jumlah']:,} ({r['jumlah']/total*100:.1f}%)" for _,r in df.iterrows())
+    return f"Distribusi tenor:\n{s}", len(df), df
+
+def run_E5():
+    df = fetch_numeric_stats("harga_rumah", limit=50000)
+    if df.empty or "harga_rumah" not in df.columns:
+        return "FAIL: kolom harga_rumah tidak ada", 0, None
+    df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce")
+    if df["harga_rumah"].isna().all():
+        return "WARN: semua nilai harga_rumah null", len(df), None
+    avg = df["harga_rumah"].mean()
+    return f"Rata-rata harga rumah: Rp {avg:,.0f}", len(df), None
+
+def run_E6():
+    df = fetch_agg("kelamin", "tahun_akad", "2023", top_n=5)
+    if df.empty:
+        return "FAIL: tidak ada data gender 2023", 0, None
+    total = df["jumlah"].sum()
+    s = "\n".join(f"  {r['kelamin']}: {r['jumlah']:,} ({r['jumlah']/total*100:.1f}%)" for _,r in df.iterrows())
+    return f"Gender pembeli 2023:\n{s}", len(df), df
+
+def run_E7():
+    df = fetch_agg("pekerjaan", "provinsi", "DKI JAKARTA", top_n=10)
+    if df.empty:
+        return "WARN: DKI Jakarta mungkin nama berbeda atau tidak ada data", 0, None
+    top5 = "\n".join(f"  {i+1}. {r['pekerjaan']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 pekerjaan di DKI Jakarta:\n{top5}", len(df), df
+
+def run_F1():
+    df = fetch_numeric_stats("harga_rumah", limit=50000)
+    if df.empty:
+        return "FAIL", 0, None
+    df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce")
+    if df["harga_rumah"].isna().all():
+        return "WARN: harga_rumah semua null", len(df), None
+    return f"Min: Rp {df['harga_rumah'].min():,.0f}\nMax: Rp {df['harga_rumah'].max():,.0f}\nRata-rata: Rp {df['harga_rumah'].mean():,.0f}", len(df), None
+
+def run_F2():
+    df = fetch_numeric_stats("nilai_flpp", limit=100000)
+    if df.empty:
+        return "FAIL", 0, None
+    df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
+    if df["nilai_flpp"].isna().all():
+        return "WARN: nilai_flpp semua null", len(df), None
+    avg = df["nilai_flpp"].mean()
+    total = df["nilai_flpp"].sum()
+    return f"Rata-rata per unit: Rp {avg:,.0f}\nTotal ({len(df):,} sample): Rp {total/1e12:.2f}T", len(df), None
+
+def run_F3():
+    df = fetch_numeric_stats("harga_rumah", "provinsi", limit=50000)
+    if df.empty:
+        return "FAIL", 0, None
+    df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce")
+    if df["harga_rumah"].isna().all():
+        return "WARN: harga_rumah semua null", len(df), None
+    avg_prov = df.groupby("provinsi")["harga_rumah"].mean().nlargest(5).reset_index()
+    s = "\n".join(f"  {i+1}. {r['provinsi']}: Rp {r['harga_rumah']:,.0f}" for i,r in avg_prov.iterrows())
+    return f"Top 5 provinsi harga tertinggi:\n{s}", len(df), avg_prov
+
+def run_F4():
+    df = fetch_numeric_stats("nilai_flpp", "bank", limit=100000)
+    if df.empty:
+        return "FAIL", 0, None
+    df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
+    if df["nilai_flpp"].isna().all():
+        return "WARN: nilai_flpp semua null", len(df), None
+    by_bank = df.groupby("bank")["nilai_flpp"].sum().nlargest(5).reset_index()
+    s = "\n".join(f"  {i+1}. {r['bank']}: Rp {r['nilai_flpp']/1e12:.2f}T" for i,r in by_bank.iterrows())
+    return f"Nilai kredit per bank (top 5):\n{s}", len(df), by_bank
+
+def run_F5():
+    df = fetch_numeric_stats("suku_bunga_kpr", limit=50000)
+    if df.empty:
+        return "FAIL", 0, None
+    df["suku_bunga_kpr"] = pd.to_numeric(df["suku_bunga_kpr"], errors="coerce")
+    if df["suku_bunga_kpr"].isna().all():
+        return "WARN: suku_bunga_kpr semua null", len(df), None
+    avg = df["suku_bunga_kpr"].mean()
+    vmin = df["suku_bunga_kpr"].min()
+    vmax = df["suku_bunga_kpr"].max()
+    return f"Suku bunga KPR:\nMin: {vmin:.2f}%\nMax: {vmax:.2f}%\nRata-rata: {avg:.2f}%", len(df), None
+
+def run_G1():
+    df = fetch_multi_group("provinsi", "bank", limit=100000)
+    if df.empty:
+        return "FAIL", 0, None
+    dom = df.groupby(["provinsi","bank"]).size().reset_index(name="n")
+    dom_idx = dom.groupby("provinsi")["n"].idxmax()
+    result = dom.loc[dom_idx, ["provinsi","bank","n"]].sort_values("n", ascending=False)
+    s = "\n".join(f"  {r['provinsi']}: {r['bank']} ({r['n']:,})" for _,r in result.head(10).iterrows())
+    return f"Bank dominan per provinsi (top 10):\n{s}", len(df), result
+
+def run_G2():
+    df = fetch_multi_group("provinsi", "nama_pengembang", limit=200000)
+    if df.empty:
+        return "FAIL", 0, None
+    dev_per_prov = df.groupby("provinsi")["nama_pengembang"].nunique().reset_index()
+    dev_per_prov.columns = ["Provinsi", "Jumlah Pengembang"]
+    dev_per_prov = dev_per_prov.sort_values("Jumlah Pengembang", ascending=False)
+    s = "\n".join(f"  {r['Provinsi']}: {r['Jumlah Pengembang']:,} pengembang" for _,r in dev_per_prov.head(10).iterrows())
+    return f"Jumlah pengembang per provinsi (top 10):\n{s}", len(df), dev_per_prov
+
+def run_G3():
+    df = fetch_multi_group("tahun_akad", "provinsi", limit=200000)
+    if df.empty:
+        return "FAIL", 0, None
+    jabar = df[df["provinsi"] == "JAWA BARAT"]
+    luar_jabar = df[df["provinsi"] != "JAWA BARAT"]
+    by_tahun_jabar = jabar.groupby("tahun_akad").size().reset_index(name="JAWA BARAT")
+    by_tahun_luar  = luar_jabar.groupby("tahun_akad").size().reset_index(name="Luar Jabar")
+    merged = by_tahun_jabar.merge(by_tahun_luar, on="tahun_akad", how="outer").fillna(0)
+    merged = merged.sort_values("tahun_akad")
+    s = "\n".join(f"  {int(r['tahun_akad'])}: Jabar={int(r['JAWA BARAT']):,} | Luar={int(r['Luar Jabar']):,}"
+                  for _,r in merged.iterrows())
+    return f"Jawa Barat vs Luar Jawa Barat per tahun:\n{s}", len(df), merged
+
+def run_G4():
+    df_j = fetch_agg("provinsi", top_n=50)
+    if df_j.empty:
+        return "FAIL", 0, None
+    pulau_jawa = ["JAWA BARAT","JAWA TENGAH","JAWA TIMUR","DKI JAKARTA","BANTEN","DI YOGYAKARTA","DAERAH ISTIMEWA YOGYAKARTA"]
+    jawa = df_j[df_j["provinsi"].isin(pulau_jawa)]["jumlah"].sum()
+    total = df_j["jumlah"].sum()
+    luar = total - jawa
+    return (f"Jawa: {jawa:,} unit ({jawa/total*100:.1f}%)\n"
+            f"Luar Jawa: {luar:,} unit ({luar/total*100:.1f}%)\n"
+            f"Total: {total:,}"), total, None
+
+def run_G5():
+    df_bank = fetch_agg("bank", top_n=10)
+    df_dev  = fetch_agg("nama_pengembang", top_n=10)
+    df_prov = fetch_agg("provinsi", top_n=10)
+    if df_bank.empty or df_dev.empty or df_prov.empty:
+        return "FAIL", 0, None
+    
+    n_bank = df_bank["jumlah"].sum()
+    top_bank = df_bank.iloc[0]
+    top_dev  = df_dev.iloc[0]
+    top_prov = df_prov.iloc[0]
+    
+    return (f"Ringkasan dominasi:\n"
+            f"  🏦 Bank terbesar: {top_bank['bank']} ({top_bank['jumlah']:,} unit)\n"
+            f"  🏗️ Pengembang terbesar: {top_dev['nama_pengembang']} ({top_dev['jumlah']:,} unit)\n"
+            f"  🗺️ Provinsi terbesar: {top_prov['provinsi']} ({top_prov['jumlah']:,} unit)"), 0, None
+
+def run_G6():
+    df = fetch_agg("asosiasi", "tahun_akad", "2023", top_n=10)
+    if df.empty:
+        return "FAIL: tidak ada data asosiasi 2023", 0, None
+    s = "\n".join(f"  {i+1}. {r['asosiasi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
+    return f"Top 5 asosiasi tahun 2023:\n{s}", len(df), df
+
+def run_G7():
+    df_prov = fetch_agg("provinsi", top_n=50)
+    if df_prov.empty:
+        return "FAIL", 0, None
+    all_prov = ["ACEH","SUMATERA UTARA","SUMATERA BARAT","RIAU","JAMBI",
+                "SUMATERA SELATAN","BENGKULU","LAMPUNG","KEPULAUAN BANGKA BELITUNG",
+                "KEPULAUAN RIAU","DKI JAKARTA","JAWA BARAT","JAWA TENGAH",
+                "DI YOGYAKARTA","DAERAH ISTIMEWA YOGYAKARTA","JAWA TIMUR","BANTEN",
+                "BALI","NUSA TENGGARA BARAT","NUSA TENGGARA TIMUR","KALIMANTAN BARAT",
+                "KALIMANTAN TENGAH","KALIMANTAN SELATAN","KALIMANTAN TIMUR",
+                "KALIMANTAN UTARA","SULAWESI UTARA","SULAWESI TENGAH","SULAWESI SELATAN",
+                "SULAWESI TENGGARA","GORONTALO","SULAWESI BARAT","MALUKU","MALUKU UTARA",
+                "PAPUA BARAT","PAPUA"]
+    found = set(df_prov["provinsi"].str.upper().tolist())
+    missing = [p for p in all_prov if p not in found and p.replace("DI ","DAERAH ISTIMEWA ") not in found]
+    return (f"Provinsi dengan data ({len(found)}): {', '.join(sorted(found)[:10])}...\n"
+            f"Mungkin tidak ada data ({len(missing)}): {', '.join(missing[:5])}{'...' if len(missing)>5 else ''}"), len(df_prov), df_prov
+
+def run_G8():
+    df_j = fetch_agg("jenis_rumah", top_n=10)
+    df_bank = fetch_agg("bank", top_n=5)
+    if df_j.empty or df_bank.empty:
+        return "FAIL", 0, None
+    jenis_list = "\n".join(f"  {r['jenis_rumah']}: {r['jumlah']:,}" for _,r in df_j.iterrows())
+    bank_list  = "\n".join(f"  {r['bank']}: {r['jumlah']:,}" for _,r in df_bank.iterrows())
+    return f"Jenis rumah:\n{jenis_list}\n\nTop bank:\n{bank_list}", 0, None
+
+# ============================================================
+# TEST REGISTRY
+# ============================================================
+TESTS = [
+    # A — ANGKA DASAR
+    ("A1","A. Angka Dasar","Berapa total unit FLPP yang sudah terealisasi?", run_A1),
+    ("A2","A. Angka Dasar","Berapa total nilai kredit FLPP (Rp) dan rata-rata per unit?", run_A2),
+    ("A3","A. Angka Dasar","Data tersedia dari tahun berapa sampai tahun berapa?", run_A3),
+    ("A4","A. Angka Dasar","Ada berapa bank pelaksana FLPP dalam data ini?", run_A4),
+    ("A5","A. Angka Dasar","Berapa jumlah provinsi yang tercatat?", run_A5),
+    ("A6","A. Angka Dasar","Berapa kisaran harga rumah FLPP (min, max, rata-rata)?", run_A6),
+    ("A7","A. Angka Dasar","Ada jenis rumah apa saja dalam data FLPP?", run_A7),
+
+    # B — RANKING & TOP-N
+    ("B1","B. Ranking & Top-N","Provinsi mana yang paling banyak unit FLPP (top 10)?", run_B1),
+    ("B2","B. Ranking & Top-N","10 kabupaten/kota dengan realisasi FLPP terbanyak nasional?", run_B2),
+    ("B3","B. Ranking & Top-N","Top 10 pengembang paling produktif secara nasional?", run_B3),
+    ("B4","B. Ranking & Top-N","Top 10 perumahan dengan unit FLPP terealisasi terbanyak?", run_B4),
+    ("B5","B. Ranking & Top-N","Bank mana yang paling aktif? Berapa market share-nya?", run_B5),
+    ("B6","B. Ranking & Top-N","Top 10 perumahan terbanyak di tahun 2023?", run_B6),
+    ("B7","B. Ranking & Top-N","Top 5 pengembang di Jawa Barat?", run_B7),
+    ("B8","B. Ranking & Top-N","Asosiasi pengembang mana yang paling banyak unit FLPP?", run_B8),
+    ("B9","B. Ranking & Top-N","Top 10 kabupaten di Jawa Timur?", run_B9),
+    ("B10","B. Ranking & Top-N","Top 5 pengembang paling aktif tahun 2024?", run_B10),
+
+    # C — FILTER SPESIFIK
+    ("C1","C. Filter Spesifik","Berapa total unit FLPP di Jawa Barat? Berapa persen dari nasional?", run_C1),
+    ("C2","C. Filter Spesifik","Berapa unit FLPP yang terealisasi di tahun 2023?", run_C2),
+    ("C3","C. Filter Spesifik","Berapa unit FLPP yang dibiayai BTN? Apa nama bank BTN di data?", run_C3),
+    ("C4","C. Filter Spesifik","Sebutkan top 10 perumahan di Sumatera Utara!", run_C4),
+    ("C5","C. Filter Spesifik","Pengembang apa yang aktif di Kalimantan Timur?", run_C5),
+    ("C6","C. Filter Spesifik","Distribusi unit FLPP per kabupaten di Banten?", run_C6),
+    ("C7","C. Filter Spesifik","Top 10 perumahan yang dibiayai BTN?", run_C7),
+    ("C8","C. Filter Spesifik","Top 5 provinsi realisasi FLPP tahun 2022?", run_C8),
+    ("C9","C. Filter Spesifik","Top 10 kabupaten realisasi FLPP tahun 2024?", run_C9),
+    ("C10","C. Filter Spesifik","Top 10 perumahan di Sulawesi Selatan?", run_C10),
+
+    # D — TREN & WAKTU
+    ("D1","D. Tren & Waktu","Tren realisasi FLPP per tahun dari awal sampai sekarang?", run_D1),
+    ("D2","D. Tren & Waktu","Tahun berapa realisasi FLPP paling banyak?", run_D2),
+    ("D3","D. Tren & Waktu","Apakah realisasi naik atau turun setiap tahun? (YoY)", run_D3),
+    ("D4","D. Tren & Waktu","Perbandingan realisasi 2022 vs 2024 — naik atau turun?", run_D4),
+    ("D5","D. Tren & Waktu","Tren realisasi di Jawa Barat per tahun?", run_D5),
+    ("D6","D. Tren & Waktu","Berapa unit FLPP per tahun yang dibiayai BTN?", run_D6),
+
+    # E — PROFIL PEMBELI
+    ("E1","E. Profil Pembeli","Berapa persen pembeli laki-laki vs perempuan?", run_E1),
+    ("E2","E. Profil Pembeli","Pekerjaan apa yang paling banyak membeli rumah FLPP?", run_E2),
+    ("E3","E. Profil Pembeli","Berapa rata-rata dan median penghasilan pembeli?", run_E3),
+    ("E4","E. Profil Pembeli","Tenor KPR berapa tahun yang paling banyak dipilih?", run_E4),
+    ("E5","E. Profil Pembeli","Berapa rata-rata harga rumah yang dibeli?", run_E5),
+    ("E6","E. Profil Pembeli","Rasio gender pembeli di tahun 2023?", run_E6),
+    ("E7","E. Profil Pembeli","Pekerjaan pembeli FLPP di DKI Jakarta?", run_E7),
+
+    # F — HARGA & NILAI KREDIT
+    ("F1","F. Harga & Nilai","Kisaran harga rumah FLPP (min, max, rata-rata)?", run_F1),
+    ("F2","F. Harga & Nilai","Berapa rata-rata nilai kredit FLPP per unit?", run_F2),
+    ("F3","F. Harga & Nilai","Provinsi mana yang rata-rata harga rumahnya paling tinggi?", run_F3),
+    ("F4","F. Harga & Nilai","Berapa total nilai kredit per bank?", run_F4),
+    ("F5","F. Harga & Nilai","Berapa rata-rata suku bunga KPR FLPP?", run_F5),
+
+    # G — KOMBINASI & ANALITIK
+    ("G1","G. Kombinasi","Bank dominan di setiap provinsi?", run_G1),
+    ("G2","G. Kombinasi","Provinsi mana yang paling banyak pengembangnya?", run_G2),
+    ("G3","G. Kombinasi","Perbandingan tren Jawa Barat vs provinsi lain per tahun?", run_G3),
+    ("G4","G. Kombinasi","Perbandingan realisasi FLPP Jawa vs Luar Jawa?", run_G4),
+    ("G5","G. Kombinasi","Siapa pemegang posisi teratas: bank, pengembang, provinsi?", run_G5),
+    ("G6","G. Kombinasi","Asosiasi pengembang paling aktif di tahun 2023?", run_G6),
+    ("G7","G. Kombinasi","Provinsi mana saja yang tidak memiliki data FLPP?", run_G7),
+    ("G8","G. Kombinasi","Jenis rumah FLPP apa saja dan bank apa yang membiayainya?", run_G8),
 ]
-
-# ============================================================
-# RUNNER — jalankan 1 test case
-# ============================================================
-def run_test(tc: dict, total: int, stats: dict) -> dict:
-    """Jalankan satu test case, kembalikan dict result."""
-    result = {
-        "id": tc["id"], "cat": tc["cat"],
-        "question": tc["question"],
-        "status": "UNKNOWN",  # PASS / FAIL / WARN / SKIP
-        "data_rows": 0,
-        "summary": "",
-        "ai_answer": "",
-        "error": "",
-        "duration_ms": 0
-    }
-
-    t0 = time.time()
-
-    try:
-        # ── Tipe khusus: stats (dari metadata, tidak perlu query) ─────────
-        if tc.get("type") == "stats":
-            key = tc.get("expect_contains_stat", "")
-            val = stats.get(key, [])
-            if val:
-                result["status"] = "PASS"
-                if key == "years":
-                    result["summary"] = f"Tahun: {min(val)}–{max(val)} ({len(val)} tahun)"
-                elif key == "banks":
-                    result["summary"] = f"{len(val)} bank: {', '.join(str(b) for b in val[:8])}" + ("..." if len(val) > 8 else "")
-                elif key == "provinces":
-                    result["summary"] = f"{len(val)} provinsi terdeteksi"
-            else:
-                result["status"] = "FAIL"
-                result["error"]  = f"Stat '{key}' kosong"
-            result["duration_ms"] = int((time.time() - t0) * 1000)
-            return result
-
-        # ── Tipe khusus: count_total ───────────────────────────────────────
-        if tc.get("type") == "count_total":
-            if total > 0:
-                result["status"] = "PASS"
-                result["summary"] = f"Total: {total:,} unit"
-            else:
-                result["status"] = "FAIL"
-                result["error"]  = "count_total = 0"
-            result["duration_ms"] = int((time.time() - t0) * 1000)
-            return result
-
-        # ── Tipe khusus: count_filter ──────────────────────────────────────
-        if tc.get("type") == "count_filter":
-            h = sb_headers(); h["Prefer"] = "count=exact"
-            params = {"select": "id", "limit": "1"}
-            for k, v in (tc.get("filters") or {}).items():
-                params[k] = v
-            r = requests.get(f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}",
-                             headers=h, params=params, timeout=20)
-            ct = r.headers.get("content-range", "")
-            cnt = int(ct.split("/")[-1]) if "/" in ct else 0
-            result["data_rows"] = cnt
-            if cnt > 0:
-                result["status"]  = "PASS"
-                result["summary"] = f"Count = {cnt:,} unit"
-            else:
-                result["status"] = "FAIL"
-                result["error"]  = f"Count = 0 untuk filter {tc.get('filters')}"
-            result["duration_ms"] = int((time.time() - t0) * 1000)
-            return result
-
-        # ── Deteksi bank BTN ───────────────────────────────────────────────
-        if tc.get("special") in ("detect_btn", "detect_btn_trend"):
-            btn_name = next((b for b in stats.get("banks", []) if "BTN" in b.upper()), None)
-            if not btn_name:
-                result["status"]  = "WARN"
-                result["summary"] = "Bank BTN tidak ditemukan di stats — skip query"
-                result["duration_ms"] = int((time.time() - t0) * 1000)
-                return result
-            filters = {"bank": f"eq.{btn_name}"}
-            select  = tc.get("select", "bank,tahun_akad")
-            df = query_supabase(select=select, filters=filters, limit=tc.get("limit", 10000))
-        else:
-            # Query normal
-            df = query_supabase(
-                select  = tc.get("select", "*"),
-                filters = tc.get("filters") or None,
-                order   = tc.get("order"),
-                limit   = tc.get("limit", 10000)
-            )
-
-        result["data_rows"] = len(df)
-
-        if df.empty:
-            result["status"] = "FAIL"
-            result["error"]  = "DataFrame kosong — query tidak menghasilkan data"
-            result["duration_ms"] = int((time.time() - t0) * 1000)
-            return result
-
-        # ── Validasi per tipe ─────────────────────────────────────────────
-        ttype = tc.get("type", "")
-
-        if ttype in ("ranking", "distribution"):
-            gcol = tc.get("group_col", "")
-            if gcol not in df.columns:
-                result["status"] = "FAIL"
-                result["error"]  = f"Kolom '{gcol}' tidak ada di hasil query"
-            else:
-                vc   = df[gcol].value_counts()
-                top_n = tc.get("expect_top_n", 5)
-                top  = vc.head(top_n)
-                result["status"]  = "PASS"
-                result["summary"] = f"Top {top_n} {gcol}:\n" + "\n".join(
-                    [f"  {i+1}. {k}: {v:,}" for i, (k, v) in enumerate(top.items())]
-                )
-
-        elif ttype == "trend":
-            gcol = tc.get("group_col", "tahun_akad")
-            if gcol in df.columns:
-                vc = pd.to_numeric(df[gcol], errors="coerce").value_counts().sort_index()
-                n_years = vc.nunique()
-                if n_years >= 1:
-                    result["status"]  = "PASS"
-                    result["summary"] = f"Data {n_years} tahun:\n" + "\n".join(
-                        [f"  {int(k)}: {v:,}" for k, v in vc.items()]
-                    )
-                else:
-                    result["status"] = "FAIL"
-                    result["error"]  = "Tidak ada data tahun"
-            else:
-                result["status"] = "FAIL"
-                result["error"]  = f"Kolom '{gcol}' tidak ada"
-
-        elif ttype == "stats_numeric":
-            ncol = tc.get("num_col", "")
-            if ncol in df.columns:
-                s = pd.to_numeric(df[ncol], errors="coerce").dropna()
-                if len(s) > 0:
-                    result["status"]  = "PASS"
-                    result["summary"] = (
-                        f"n={len(s):,} | "
-                        f"rata-rata={s.mean():,.0f} | "
-                        f"median={s.median():,.0f} | "
-                        f"min={s.min():,.0f} | "
-                        f"max={s.max():,.0f} | "
-                        f"total={s.sum():,.0f}"
-                    )
-                else:
-                    result["status"] = "FAIL"
-                    result["error"]  = f"Kolom '{ncol}' semua null"
-            else:
-                result["status"] = "WARN"
-                result["summary"] = f"Kolom '{ncol}' tidak ada (data rows: {len(df):,})"
-
-        elif ttype == "agg_numeric":
-            gcol = tc.get("group_col", "")
-            ncol = tc.get("num_col", "")
-            agg  = tc.get("agg", "mean")
-            if gcol in df.columns and ncol in df.columns:
-                df[ncol] = pd.to_numeric(df[ncol], errors="coerce")
-                agg_df = df.groupby(gcol)[ncol].agg(agg).nlargest(5).reset_index()
-                result["status"]  = "PASS"
-                result["summary"] = f"Top 5 {gcol} by {agg}({ncol}):\n" + "\n".join(
-                    [f"  {row[gcol]}: {row[ncol]:,.0f}" for _, row in agg_df.iterrows()]
-                )
-            else:
-                result["status"] = "FAIL"
-                result["error"]  = f"Kolom '{gcol}' atau '{ncol}' tidak ada"
-
-        elif ttype == "cross_tab":
-            gcol = tc.get("group_col", "")
-            scol = tc.get("sub_col", "")
-            if gcol in df.columns and scol in df.columns:
-                dom = df.groupby([gcol, scol]).size().reset_index(name="n")
-                top = dom.loc[dom.groupby(gcol)["n"].idxmax()]
-                result["status"]  = "PASS"
-                result["summary"] = f"Bank dominan per provinsi (sampel {len(dom)} kombinasi):\n" + "\n".join(
-                    [f"  {row[gcol]}: {row[scol]} ({row['n']:,})" for _, row in top.head(8).iterrows()]
-                )
-            else:
-                result["status"] = "FAIL"
-                result["error"]  = f"Kolom '{gcol}' atau '{scol}' tidak ada"
-
-        elif ttype in ("aggregate", "filter_data"):
-            result["status"]  = "PASS"
-            result["summary"] = f"{len(df):,} baris data berhasil diambil\nKolom: {', '.join(df.columns.tolist())}"
-
-        else:
-            result["status"]  = "PASS"
-            result["summary"] = f"{len(df):,} baris"
-
-        # ── AI Answer (Groq) ───────────────────────────────────────────────
-        # Hanya panggil AI untuk PASS — validasi bahwa AI bisa menjawab dengan benar
-        if result["status"] == "PASS":
-            schema_str = "\n".join([f"  {k}: {v}" for k, v in SCHEMA.items()])
-            ai_answer = call_groq([
-                {
-                    "role": "system",
-                    "content": f"""Kamu adalah analis data FLPP Tapera.
-Total unit FLPP: {total:,}. Setiap baris = 1 unit.
-Skema: {schema_str}
-Bank: {', '.join(stats.get('banks', [])[:10])}
-Provinsi: {', '.join(stats.get('provinces', [])[:10])}
-Tahun: {stats.get('years', [])}
-
-Jawab singkat dan faktual berdasarkan data ringkasan berikut.
-JANGAN katakan 'tidak bisa' atau 'data tidak cukup' jika angka sudah ada."""
-                },
-                {
-                    "role": "user",
-                    "content": f"Pertanyaan: {tc['question']}\n\nData:\n{result['summary']}"
-                }
-            ], temperature=0.2, max_tokens=300)
-            result["ai_answer"] = ai_answer
-
-    except Exception as e:
-        result["status"] = "FAIL"
-        result["error"]  = str(e)
-
-    result["duration_ms"] = int((time.time() - t0) * 1000)
-    return result
 
 # ============================================================
 # UI
 # ============================================================
-st.markdown("""
-<div style="padding: 24px 0 12px 0; border-bottom: 1px solid #1e293b; margin-bottom: 24px;">
-    <h1 style="color: #e2e8f0; font-size: 22px; font-weight: 700; margin: 0;">🧪 Test Suite — AI FLPP Data Reader</h1>
-    <p style="color: #64748b; font-size: 13px; margin: 6px 0 0 0;">Pengujian kemampuan membaca & menjawab data untuk 35 pertanyaan kritis</p>
-</div>
-""", unsafe_allow_html=True)
-
-# Status koneksi
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.markdown(
-        f'<p style="color: #34d399; font-size: 13px;">✓ Supabase URL: {"OK" if SUPABASE_URL else "❌ KOSONG"}</p>',
-        unsafe_allow_html=True
-    )
-with col2:
-    st.markdown(
-        f'<p style="color: #34d399; font-size: 13px;">✓ Supabase Key: {"OK" if SUPABASE_KEY else "❌ KOSONG"}</p>',
-        unsafe_allow_html=True
-    )
-with col3:
-    st.markdown(
-        f'<p style="color: #34d399; font-size: 13px;">✓ Groq Key: {"OK" if GROQ_KEY else "❌ KOSONG"}</p>',
-        unsafe_allow_html=True
-    )
-
+st.markdown("# 🧪 Test Suite — Asisten AI Data Tapera")
+st.markdown(f"**{len(TESTS)} pertanyaan uji** | 7 kategori | Data dari Supabase (aggregasi penuh)")
 st.divider()
 
-# Pilih mode run
-col_opt1, col_opt2, col_opt3 = st.columns([2, 2, 3])
+# Opsi test
+col_opt1, col_opt2, col_opt3, col_opt4 = st.columns(4)
 with col_opt1:
-    run_mode = st.selectbox(
-        "Mode pengujian",
-        ["Semua (35 pertanyaan)", "Hanya data query (tanpa AI)", "Satu kategori saja"],
-        index=0
-    )
+    run_ai = st.checkbox("Jalankan AI DeepSeek per tes", value=False,
+                         help="Centang untuk dapat jawaban AI. Lebih lambat tapi lebih informatif.")
 with col_opt2:
-    if run_mode == "Satu kategori saja":
-        cat_filter = st.selectbox(
-            "Pilih kategori",
-            ["A. Angka Dasar", "B. Ranking & Top-N", "C. Filter & Spesifik",
-             "D. Tren & Waktu", "E. Profil Pembeli", "F. Harga & Nilai", "G. Kombinasi & Analitik"]
-        )
-    else:
-        cat_filter = None
+    cat_filter = st.multiselect("Filter kategori:",
+                                ["A. Angka Dasar","B. Ranking & Top-N","C. Filter Spesifik",
+                                 "D. Tren & Waktu","E. Profil Pembeli","F. Harga & Nilai","G. Kombinasi"],
+                                default=[])
 with col_opt3:
-    st.markdown("<br>", unsafe_allow_html=True)
+    export_csv = st.checkbox("Export hasil ke CSV", value=True)
+with col_opt4:
+    st.metric("Total Tes", len(TESTS))
 
-col_run, col_reset = st.columns([1, 5])
-with col_run:
-    run_all = st.button("▶ Jalankan Tes", use_container_width=True, type="primary")
+filtered_tests = TESTS if not cat_filter else [t for t in TESTS if t[1] in cat_filter]
+st.caption(f"Menjalankan {len(filtered_tests)} tes")
 
-if "test_results" not in st.session_state:
-    st.session_state.test_results = []
-if "test_running" not in st.session_state:
-    st.session_state.test_running = False
-
-# ── RUN ──────────────────────────────────────────────────────────────────────
-if run_all:
-    st.session_state.test_results = []
-    st.session_state.test_running = True
-
-    with st.spinner("Menghubungkan ke database..."):
-        total = count_total()
-        stats = get_stats()
-
-    if total == 0:
-        st.error("❌ Database tidak terhubung. Cek SUPABASE_URL dan SUPABASE_KEY.")
-        st.stop()
-
-    # Filter test cases
-    tests_to_run = TEST_CASES
-    if run_mode == "Satu kategori saja" and cat_filter:
-        tests_to_run = [tc for tc in TEST_CASES if tc["cat"] == cat_filter]
-    skip_ai = run_mode == "Hanya data query (tanpa AI)"
-
-    st.info(f"Menjalankan {len(tests_to_run)} test... (estimasi {len(tests_to_run) * 3}–{len(tests_to_run) * 6} detik)")
-
-    progress = st.progress(0)
-    status_txt = st.empty()
-
+if st.button("▶️ Jalankan Semua Tes", type="primary", use_container_width=True):
     results = []
-    for i, tc in enumerate(tests_to_run):
-        status_txt.markdown(
-            f'<p style="color: #94a3b8; font-size: 13px;">🔍 [{i+1}/{len(tests_to_run)}] {tc["id"]}: {tc["question"][:60]}...</p>',
-            unsafe_allow_html=True
-        )
-        r = run_test(tc, total, stats)
-        if skip_ai:
-            r["ai_answer"] = "(AI dilewati)"
-        results.append(r)
-        progress.progress((i + 1) / len(tests_to_run))
-        time.sleep(0.3)  # Rate limit
-
-    st.session_state.test_results = results
-    st.session_state.test_running  = False
-    progress.empty()
-    status_txt.empty()
-    st.rerun()
-
-# ── TAMPILKAN HASIL ───────────────────────────────────────────────────────────
-if st.session_state.test_results:
-    results = st.session_state.test_results
-
-    # Ringkasan
-    n_pass = sum(1 for r in results if r["status"] == "PASS")
-    n_fail = sum(1 for r in results if r["status"] == "FAIL")
-    n_warn = sum(1 for r in results if r["status"] == "WARN")
-    n_total = len(results)
-    pct = int(n_pass / n_total * 100) if n_total else 0
-
-    st.markdown(f"""
-    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 20px 0;">
-        <div class="stat-card"><div class="stat-n">{n_total}</div><div class="stat-l">Total Test</div></div>
-        <div class="stat-card"><div class="stat-n" style="color: #34d399;">{n_pass}</div><div class="stat-l">PASS ✅</div></div>
-        <div class="stat-card"><div class="stat-n" style="color: #f87171;">{n_fail}</div><div class="stat-l">FAIL ❌</div></div>
-        <div class="stat-card"><div class="stat-n" style="color: #fbbf24;">{pct}%</div><div class="stat-l">Success Rate</div></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if n_fail > 0:
-        st.warning(f"⚠️ {n_fail} test gagal — lihat detail di bawah untuk perbaikan")
-    elif n_warn > 0:
-        st.info(f"ℹ️ Semua test PASS ({n_warn} warning — biasanya kolom yang tidak ada di data)")
+    
+    # Progress
+    prog_bar = st.progress(0, text="Memulai tes...")
+    
+    # Grouping by category
+    cats = {}
+    for tid, cat, q, fn in filtered_tests:
+        cats.setdefault(cat, []).append((tid, q, fn))
+    
+    n_pass = n_fail = n_warn = 0
+    test_idx = 0
+    
+    for cat, tests in cats.items():
+        st.markdown(f'<div class="cat-header">📂 {cat}</div>', unsafe_allow_html=True)
+        
+        for tid, q, fn in tests:
+            t0 = time.time()
+            prog_bar.progress(test_idx / len(filtered_tests),
+                              text=f"Running {tid}: {q[:50]}...")
+            
+            ringkasan = ""
+            n_rows = 0
+            ai_jawaban = ""
+            status = "PASS"
+            error_msg = ""
+            
+            try:
+                ringkasan, n_rows, detail_df = fn()
+                
+                if ringkasan.startswith("FAIL"):
+                    status = "FAIL"
+                    error_msg = ringkasan
+                    ringkasan = ""
+                elif ringkasan.startswith("WARN"):
+                    status = "WARN"
+                    error_msg = ringkasan
+                    ringkasan = ""
+                
+                # Jalankan AI jika diminta dan status bukan FAIL
+                if run_ai and status in ["PASS"] and ringkasan:
+                    ai_jawaban = tanya_deepseek(
+                        f"Pertanyaan: {q}\n\nData:\n{ringkasan}\n\nJawab singkat dan akurat."
+                    )
+                    
+            except Exception as e:
+                status = "FAIL"
+                error_msg = str(e)
+            
+            durasi = int((time.time() - t0) * 1000)
+            
+            # Status counter
+            if status == "PASS":
+                n_pass += 1
+                card_class = "pass-card"
+                icon = "✅"
+            elif status == "WARN":
+                n_warn += 1
+                card_class = "warn-card"
+                icon = "⚠️"
+            else:
+                n_fail += 1
+                card_class = "fail-card"
+                icon = "❌"
+            
+            # Render card
+            ai_html = f'<div class="test-ai">🤖 {ai_jawaban}</div>' if ai_jawaban else ""
+            err_html = f'<div class="test-err">{error_msg}</div>' if error_msg else ""
+            sum_html = f'<div class="test-sum">{ringkasan}</div>' if ringkasan else ""
+            
+            st.markdown(f"""
+<div class="{card_class}">
+  <span class="test-id">{tid}</span>
+  <div class="test-q">{icon} {q}</div>
+  <div class="test-rows">{n_rows:,} baris | {durasi}ms</div>
+  {sum_html}{err_html}{ai_html}
+</div>
+""", unsafe_allow_html=True)
+            
+            results.append({
+                "ID": tid, "Kategori": cat, "Pertanyaan": q,
+                "Status": status, "Data Rows": n_rows,
+                "Ringkasan": ringkasan, "Error": error_msg,
+                "Jawaban AI": ai_jawaban, "Durasi (ms)": durasi
+            })
+            test_idx += 1
+    
+    prog_bar.progress(1.0, text="✅ Selesai!")
+    
+    # Summary
+    total = len(results)
+    st.divider()
+    st.markdown("## 📊 Hasil Akhir")
+    s1, s2, s3, s4 = st.columns(4)
+    with s1:
+        pct = n_pass/total*100
+        st.markdown(f'<div class="summary-box"><div class="big-num" style="color:#22c55e">{n_pass}</div>'
+                    f'<div class="big-label">PASS ({pct:.0f}%)</div></div>', unsafe_allow_html=True)
+    with s2:
+        pct = n_warn/total*100
+        st.markdown(f'<div class="summary-box"><div class="big-num" style="color:#f59e0b">{n_warn}</div>'
+                    f'<div class="big-label">WARN ({pct:.0f}%)</div></div>', unsafe_allow_html=True)
+    with s3:
+        pct = n_fail/total*100
+        st.markdown(f'<div class="summary-box"><div class="big-num" style="color:#ef4444">{n_fail}</div>'
+                    f'<div class="big-label">FAIL ({pct:.0f}%)</div></div>', unsafe_allow_html=True)
+    with s4:
+        st.markdown(f'<div class="summary-box"><div class="big-num">{total}</div>'
+                    f'<div class="big-label">TOTAL TES</div></div>', unsafe_allow_html=True)
+    
+    if n_fail == 0 and n_warn == 0:
+        st.success("🎉 Semua tes PASS! AI siap digunakan secara penuh.")
+    elif n_fail == 0:
+        st.warning(f"⚠️ {n_warn} tes WARN (data ada tapi ada kolom null). Cek data sumber.")
     else:
-        st.success(f"🎉 Semua {n_pass} test PASS! AI sudah bisa membaca semua data dengan benar.")
-
-    st.divider()
-
-    # Filter tampilan
-    show_filter = st.radio(
-        "Tampilkan:", ["Semua", "PASS saja", "FAIL saja", "WARN saja"],
-        horizontal=True, index=0
-    )
-
-    # Tampilkan per kategori
-    cats = []
-    for r in results:
-        if r["cat"] not in cats: cats.append(r["cat"])
-
-    for cat in cats:
-        cat_results = [r for r in results if r["cat"] == cat]
-
-        # Apply filter
-        if show_filter == "PASS saja":
-            cat_results = [r for r in cat_results if r["status"] == "PASS"]
-        elif show_filter == "FAIL saja":
-            cat_results = [r for r in cat_results if r["status"] == "FAIL"]
-        elif show_filter == "WARN saja":
-            cat_results = [r for r in cat_results if r["status"] == "WARN"]
-
-        if not cat_results: continue
-
-        n_cat_pass = sum(1 for r in cat_results if r["status"] == "PASS")
-        n_cat_total = sum(1 for r in results if r["cat"] == cat)
-
-        with st.expander(f"{cat}  ·  {n_cat_pass}/{n_cat_total} PASS", expanded=(show_filter == "FAIL saja")):
-            for r in cat_results:
-                css_class = {
-                    "PASS": "pass", "FAIL": "fail",
-                    "WARN": "warn", "UNKNOWN": "skip"
-                }.get(r["status"], "skip")
-
-                icon = {"PASS": "✅", "FAIL": "❌", "WARN": "⚠️"}.get(r["status"], "⏭")
-
-                st.markdown(f"""
-                <div class="{css_class}">
-                    <div class="q-label">{r["id"]} · {r["duration_ms"]}ms · {icon} {r["status"]}</div>
-                    <div class="q-text">{r["question"]}</div>
-                    {"<div class='answer'>" + r["summary"] + "</div>" if r["summary"] else ""}
-                    {"<div class='answer' style='color:#f87171; margin-top:6px;'>Error: " + r["error"] + "</div>" if r["error"] else ""}
-                    {"<div class='answer' style='color:#7dd3fc; margin-top:8px; padding-top:8px; border-top:1px solid #1e3a5f;'><b>AI:</b> " + r["ai_answer"] + "</div>" if r["ai_answer"] and r["ai_answer"] != "(AI dilewati)" else ""}
-                </div>
-                """, unsafe_allow_html=True)
-
-    # Export hasil
-    st.divider()
-    st.markdown("### 📥 Export Hasil")
-
-    df_export = pd.DataFrame([{
-        "ID": r["id"],
-        "Kategori": r["cat"],
-        "Pertanyaan": r["question"],
-        "Status": r["status"],
-        "Data Rows": r["data_rows"],
-        "Ringkasan": r["summary"][:200] if r["summary"] else "",
-        "Error": r["error"],
-        "Jawaban AI": r["ai_answer"][:300] if r["ai_answer"] else "",
-        "Durasi (ms)": r["duration_ms"]
-    } for r in results])
-
-    st.dataframe(df_export, use_container_width=True, hide_index=True)
-
-    csv = df_export.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇️ Download CSV",
-        data=csv,
-        file_name=f"test_flpp_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv"
-    )
+        st.error(f"❌ {n_fail} tes FAIL. Perlu investigasi lebih lanjut.")
+    
+    # Export CSV
+    if export_csv:
+        df_results = pd.DataFrame(results)
+        csv = df_results.to_csv(index=False).encode("utf-8-sig")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            "📥 Download Hasil Tes (CSV)",
+            csv,
+            file_name=f"test_tapera_{ts}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+    
+    # Detail FAIL
+    fail_list = [r for r in results if r["Status"] == "FAIL"]
+    if fail_list:
+        st.markdown("### ❌ Daftar Tes yang FAIL")
+        for r in fail_list:
+            st.markdown(f"- **{r['ID']}** {r['Pertanyaan']}: `{r['Error']}`")
 
 else:
-    st.markdown("""
-    <div style="text-align: center; padding: 60px 0; color: #334155;">
-        <p style="font-size: 40px;">🧪</p>
-        <p style="font-size: 16px; font-weight: 500; color: #64748b;">Belum ada hasil</p>
-        <p style="font-size: 13px; color: #475569;">Klik <b>▶ Jalankan Tes</b> untuk mulai pengujian</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Preview
+    st.info("👆 Klik **Jalankan Semua Tes** untuk mulai pengujian.")
+    st.markdown("### 📋 Daftar Pertanyaan Uji")
+    
+    cats = {}
+    for tid, cat, q, fn in filtered_tests:
+        cats.setdefault(cat, []).append((tid, q))
+    
+    for cat, tests in cats.items():
+        st.markdown(f"**{cat}**")
+        for tid, q in tests:
+            st.markdown(f"- `{tid}` {q}")
