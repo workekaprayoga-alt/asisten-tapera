@@ -10,7 +10,7 @@ from datetime import datetime
 # ============================================================
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://wsknzpurkujhyzdoiffh.supabase.co")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
-DEEPSEEK_KEY = st.secrets.get("DEEPSEEK_KEY", "")
+GROQ_KEY = st.secrets.get("GROQ_KEY", "")
 TABLE_NAME   = "realisasi"
 
 st.set_page_config(
@@ -88,7 +88,7 @@ def fetch_agg(group_col: str, filter_col: str = None,
             all_data.extend(chunk)
             if len(chunk) < batch: break
             offset += batch
-            if offset >= 200000: break
+            if offset >= 1000000: break
         except:
             break
 
@@ -104,39 +104,58 @@ def fetch_agg(group_col: str, filter_col: str = None,
 def fetch_numeric_stats(col: str, group_col: str = None,
                         filter_col: str = None, filter_val: str = None,
                         limit: int = 50000) -> pd.DataFrame:
-    """Ambil kolom numerik + opsional group_col untuk statistik."""
+    """Ambil kolom numerik + opsional group_col — pakai pagination penuh."""
     url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
     h = sb_headers()
     select = f"{col},{group_col}" if group_col else col
-    params = {"select": select, "limit": str(limit)}
+    params_base = {"select": select}
     if filter_col and filter_val:
-        params[filter_col] = f"eq.{filter_val}"
-    try:
-        r = requests.get(url, headers=h, params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        return pd.DataFrame(data) if data else pd.DataFrame()
-    except:
-        return pd.DataFrame()
+        params_base[filter_col] = f"eq.{filter_val}"
+    
+    all_data = []
+    offset = 0
+    batch = 10000
+    while True:
+        p = {**params_base, "limit": str(batch), "offset": str(offset)}
+        try:
+            r = requests.get(url, headers=h, params=p, timeout=30)
+            r.raise_for_status()
+            chunk = r.json()
+            if not chunk: break
+            all_data.extend(chunk)
+            if len(chunk) < batch: break
+            offset += batch
+            if offset >= 1000000: break
+        except: break
+    return pd.DataFrame(all_data) if all_data else pd.DataFrame()
 
 def fetch_multi_group(col1: str, col2: str, limit: int = 100000) -> pd.DataFrame:
-    """Ambil 2 kolom untuk groupby kombinasi."""
+    """Ambil 2 kolom untuk groupby kombinasi — pagination penuh."""
     url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
     h = sb_headers()
-    params = {"select": f"{col1},{col2}", "limit": str(limit)}
-    try:
-        r = requests.get(url, headers=h, params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        return pd.DataFrame(data) if data else pd.DataFrame()
-    except:
-        return pd.DataFrame()
+    params_base = {"select": f"{col1},{col2}"}
+    all_data = []
+    offset = 0
+    batch = 10000
+    while True:
+        p = {**params_base, "limit": str(batch), "offset": str(offset)}
+        try:
+            r = requests.get(url, headers=h, params=p, timeout=30)
+            r.raise_for_status()
+            chunk = r.json()
+            if not chunk: break
+            all_data.extend(chunk)
+            if len(chunk) < batch: break
+            offset += batch
+            if offset >= 1000000: break
+        except: break
+    return pd.DataFrame(all_data) if all_data else pd.DataFrame()
 
 def fetch_tren(filter_col: str = None, filter_val: str = None) -> pd.DataFrame:
-    """Tren per tahun_akad."""
+    """Tren per tahun_realisasi."""
     url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
     h = sb_headers()
-    params = {"select": "tahun_akad", "limit": "200000"}
+    params = {"select": "tahun_realisasi", "limit": "1000000"}
     if filter_col and filter_val:
         params[filter_col] = f"eq.{filter_val}"
     all_data = []
@@ -156,17 +175,17 @@ def fetch_tren(filter_col: str = None, filter_val: str = None) -> pd.DataFrame:
     if not all_data:
         return pd.DataFrame()
     df = pd.DataFrame(all_data)
-    result = df["tahun_akad"].value_counts().sort_index().reset_index()
+    result = df["tahun_realisasi"].value_counts().sort_index().reset_index()
     result.columns = ["Tahun", "Unit"]
     return result
 
 def tanya_deepseek(prompt: str) -> str:
-    if not DEEPSEEK_KEY:
+    if not GROQ_KEY:
         return "—"
     try:
         r = requests.post(
             "https://api.deepseek.com/chat/completions",
-            headers={"Authorization": f"Bearer {DEEPSEEK_KEY}",
+            headers={"Authorization": f"Bearer {GROQ_KEY}",
                      "Content-Type": "application/json"},
             json={"model": "deepseek-chat",
                   "messages": [
@@ -193,7 +212,7 @@ def run_A1():
     return f"Total: {n:,} unit", n, None
 
 def run_A2():
-    df = fetch_numeric_stats("nilai_flpp", limit=200000)
+    df = fetch_numeric_stats("nilai_flpp", limit=1000000)
     if df.empty or "nilai_flpp" not in df.columns:
         return "FAIL: kolom nilai_flpp tidak ada", 0, None
     df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
@@ -275,7 +294,7 @@ def run_B5():
     return f"Top 5 bank:\n{top5}", len(df), df
 
 def run_B6():
-    df = fetch_agg("nama_perumahan", "tahun_akad", "2023", top_n=20)
+    df = fetch_agg("nama_perumahan", "tahun_realisasi", "2023", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data 2023", 0, None
     top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
@@ -303,7 +322,7 @@ def run_B9():
     return f"Top 10 kabupaten Jawa Timur:\n{top10}", len(df), df
 
 def run_B10():
-    df = fetch_agg("nama_pengembang", "tahun_akad", "2024", top_n=10)
+    df = fetch_agg("nama_pengembang", "tahun_realisasi", "2024", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data 2024", 0, None
     top5 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
@@ -370,14 +389,14 @@ def run_C7():
     return f"Top 10 perumahan dibiayai BTN:\n{top10}", len(df), df
 
 def run_C8():
-    df = fetch_agg("provinsi", "tahun_akad", "2022", top_n=10)
+    df = fetch_agg("provinsi", "tahun_realisasi", "2022", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data 2022", 0, None
     top5 = "\n".join(f"  {i+1}. {r['provinsi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 provinsi tahun 2022:\n{top5}", len(df), df
 
 def run_C9():
-    df = fetch_agg("kabupaten", "tahun_akad", "2024", top_n=20)
+    df = fetch_agg("kabupaten", "tahun_realisasi", "2024", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data 2024", 0, None
     top10 = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
@@ -494,7 +513,7 @@ def run_E5():
     return f"Rata-rata harga rumah: Rp {avg:,.0f}", len(df), None
 
 def run_E6():
-    df = fetch_agg("kelamin", "tahun_akad", "2023", top_n=5)
+    df = fetch_agg("kelamin", "tahun_realisasi", "2023", top_n=5)
     if df.empty:
         return "FAIL: tidak ada data gender 2023", 0, None
     total = df["jumlah"].sum()
@@ -573,7 +592,7 @@ def run_G1():
     return f"Bank dominan per provinsi (top 10):\n{s}", len(df), result
 
 def run_G2():
-    df = fetch_multi_group("provinsi", "nama_pengembang", limit=200000)
+    df = fetch_multi_group("provinsi", "nama_pengembang", limit=1000000)
     if df.empty:
         return "FAIL", 0, None
     dev_per_prov = df.groupby("provinsi")["nama_pengembang"].nunique().reset_index()
@@ -583,16 +602,16 @@ def run_G2():
     return f"Jumlah pengembang per provinsi (top 10):\n{s}", len(df), dev_per_prov
 
 def run_G3():
-    df = fetch_multi_group("tahun_akad", "provinsi", limit=200000)
+    df = fetch_multi_group("tahun_realisasi", "provinsi", limit=1000000)
     if df.empty:
         return "FAIL", 0, None
     jabar = df[df["provinsi"] == "JAWA BARAT"]
     luar_jabar = df[df["provinsi"] != "JAWA BARAT"]
-    by_tahun_jabar = jabar.groupby("tahun_akad").size().reset_index(name="JAWA BARAT")
-    by_tahun_luar  = luar_jabar.groupby("tahun_akad").size().reset_index(name="Luar Jabar")
-    merged = by_tahun_jabar.merge(by_tahun_luar, on="tahun_akad", how="outer").fillna(0)
-    merged = merged.sort_values("tahun_akad")
-    s = "\n".join(f"  {int(r['tahun_akad'])}: Jabar={int(r['JAWA BARAT']):,} | Luar={int(r['Luar Jabar']):,}"
+    by_tahun_jabar = jabar.groupby("tahun_realisasi").size().reset_index(name="JAWA BARAT")
+    by_tahun_luar  = luar_jabar.groupby("tahun_realisasi").size().reset_index(name="Luar Jabar")
+    merged = by_tahun_jabar.merge(by_tahun_luar, on="tahun_realisasi", how="outer").fillna(0)
+    merged = merged.sort_values("tahun_realisasi")
+    s = "\n".join(f"  {int(r['tahun_realisasi'])}: Jabar={int(r['JAWA BARAT']):,} | Luar={int(r['Luar Jabar']):,}"
                   for _,r in merged.iterrows())
     return f"Jawa Barat vs Luar Jawa Barat per tahun:\n{s}", len(df), merged
 
@@ -626,7 +645,7 @@ def run_G5():
             f"  🗺️ Provinsi terbesar: {top_prov['provinsi']} ({top_prov['jumlah']:,} unit)"), 0, None
 
 def run_G6():
-    df = fetch_agg("asosiasi", "tahun_akad", "2023", top_n=10)
+    df = fetch_agg("asosiasi", "tahun_realisasi", "2023", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data asosiasi 2023", 0, None
     s = "\n".join(f"  {i+1}. {r['asosiasi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
@@ -741,7 +760,7 @@ st.divider()
 # Opsi test
 col_opt1, col_opt2, col_opt3, col_opt4 = st.columns(4)
 with col_opt1:
-    run_ai = st.checkbox("Jalankan AI DeepSeek per tes", value=False,
+    run_ai = st.checkbox("Jalankan AI Groq per tes", value=False,
                          help="Centang untuk dapat jawaban AI. Lebih lambat tapi lebih informatif.")
 with col_opt2:
     cat_filter = st.multiselect("Filter kategori:",
