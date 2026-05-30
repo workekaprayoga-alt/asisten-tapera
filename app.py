@@ -53,6 +53,41 @@ def sb_headers():
         "Content-Type": "application/json",
     }
 
+def parse_rupiah(val) -> float:
+    """
+    Parse angka format Indonesia ke float.
+    Contoh: '156.500.000' -> 156500000.0
+             '5%' -> 5.0
+             '5.252.280' -> 5252280.0
+    """
+    if val is None:
+        return float('nan')
+    s = str(val).strip()
+    if not s or s in ('', 'None', 'null', '-'):
+        return float('nan')
+    # Hapus karakter non-numerik kecuali titik, koma, minus
+    s = s.replace('Rp', '').replace(' ', '').replace('%', '').strip()
+    # Hitung titik dan koma
+    dots = s.count('.')
+    commas = s.count(',')
+    if dots > 1:
+        # Titik = pemisah ribuan (format Indonesia): 156.500.000
+        s = s.replace('.', '')
+        if commas == 1:
+            s = s.replace(',', '.')
+    elif dots == 1 and commas == 1:
+        # Mungkin: 1.500,50 -> 1500.50
+        s = s.replace('.', '').replace(',', '.')
+    elif dots == 0 and commas == 1:
+        # Mungkin desimal: 5,5 -> 5.5
+        s = s.replace(',', '.')
+    # dots==1 dan commas==0: biarkan (sudah standar: 156.5)
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return float('nan')
+
+
 def count_total() -> int:
     """Hitung total baris via content-range header Supabase."""
     try:
@@ -88,7 +123,7 @@ def fetch_agg(group_col: str, filter_col: str = None,
 
     all_data = []
     offset = 0
-    batch = 10000
+    batch = 1000
     while True:
         p = {**params, "limit": str(batch), "offset": str(offset)}
         try:
@@ -125,7 +160,7 @@ def fetch_numeric_stats(col: str, group_col: str = None,
     
     all_data = []
     offset = 0
-    batch = 10000
+    batch = 1000
     while True:
         p = {**params_base, "limit": str(batch), "offset": str(offset)}
         try:
@@ -147,7 +182,7 @@ def fetch_multi_group(col1: str, col2: str, limit: int = 100000) -> pd.DataFrame
     params_base = {"select": f"{col1},{col2}"}
     all_data = []
     offset = 0
-    batch = 10000
+    batch = 1000
     while True:
         p = {**params_base, "limit": str(batch), "offset": str(offset)}
         try:
@@ -172,7 +207,7 @@ def fetch_tren(filter_col: str = None, filter_val: str = None) -> pd.DataFrame:
         params_base[filter_col] = f"eq.{filter_val}"
     all_data = []
     offset = 0
-    batch = 10000
+    batch = 1000
     while True:
         p = {**params_base, "limit": str(batch), "offset": str(offset)}
         try:
@@ -235,7 +270,7 @@ def run_A1b():
     h = sb_headers()
     total = 0
     offset = 0
-    batch = 10000
+    batch = 1000
     while True:
         p = {"select": "id", "limit": str(batch), "offset": str(offset)}
         try:
@@ -272,7 +307,7 @@ def run_A2():
     df = fetch_numeric_stats("nilai_flpp", limit=1000000)
     if df.empty or "nilai_flpp" not in df.columns:
         return "FAIL: kolom nilai_flpp tidak ada", 0, None
-    df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
+    df["nilai_flpp"] = df["nilai_flpp"].apply(parse_rupiah)
     total = df["nilai_flpp"].sum()
     avg   = df["nilai_flpp"].mean()
     return f"Total: Rp {total/1e12:.2f} T\nRata-rata per unit: Rp {avg:,.0f}", len(df), None
@@ -301,7 +336,8 @@ def run_A6():
     df = fetch_numeric_stats("harga_rumah", limit=50000)
     if df.empty or "harga_rumah" not in df.columns:
         return "FAIL: kolom harga_rumah kosong", 0, None
-    df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce").dropna()
+    df["harga_rumah"] = df["harga_rumah"].apply(parse_rupiah)
+    df = df.dropna(subset=["harga_rumah"])
     vmin = df["harga_rumah"].min()
     vmax = df["harga_rumah"].max()
     vavg = df["harga_rumah"].mean()
@@ -544,7 +580,7 @@ def run_E3():
     df = fetch_numeric_stats("penghasilan", limit=50000)
     if df.empty or "penghasilan" not in df.columns:
         return "FAIL: kolom penghasilan tidak ada", 0, None
-    df["penghasilan"] = pd.to_numeric(df["penghasilan"], errors="coerce")
+    df["penghasilan"] = df["penghasilan"].apply(parse_rupiah)
     if df["penghasilan"].isna().all():
         return "WARN: semua nilai penghasilan null", len(df), None
     avg = df["penghasilan"].mean()
@@ -563,7 +599,7 @@ def run_E5():
     df = fetch_numeric_stats("harga_rumah", limit=50000)
     if df.empty or "harga_rumah" not in df.columns:
         return "FAIL: kolom harga_rumah tidak ada", 0, None
-    df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce")
+    df["harga_rumah"] = df["harga_rumah"].apply(parse_rupiah)
     if df["harga_rumah"].isna().all():
         return "WARN: semua nilai harga_rumah null", len(df), None
     avg = df["harga_rumah"].mean()
@@ -608,7 +644,7 @@ def run_F1():
     df = fetch_numeric_stats("harga_rumah", limit=50000)
     if df.empty:
         return "FAIL", 0, None
-    df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce")
+    df["harga_rumah"] = df["harga_rumah"].apply(parse_rupiah)
     if df["harga_rumah"].isna().all():
         debug = debug_kolom_numerik()
         return f"WARN: harga_rumah semua null\nDEBUG: {debug}", len(df), None
@@ -618,7 +654,7 @@ def run_F2():
     df = fetch_numeric_stats("nilai_flpp", limit=100000)
     if df.empty:
         return "FAIL", 0, None
-    df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
+    df["nilai_flpp"] = df["nilai_flpp"].apply(parse_rupiah)
     if df["nilai_flpp"].isna().all():
         debug = debug_kolom_numerik()
         return f"WARN: nilai_flpp semua null\nDEBUG: {debug}", len(df), None
@@ -630,7 +666,7 @@ def run_F3():
     df = fetch_numeric_stats("harga_rumah", "provinsi", limit=50000)
     if df.empty:
         return "FAIL", 0, None
-    df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce")
+    df["harga_rumah"] = df["harga_rumah"].apply(parse_rupiah)
     if df["harga_rumah"].isna().all():
         return "WARN: harga_rumah semua null\n(Kolom mungkin bernama berbeda di Supabase)", len(df), None
     avg_prov = df.groupby("provinsi")["harga_rumah"].mean().nlargest(5).reset_index()
@@ -641,7 +677,7 @@ def run_F4():
     df = fetch_numeric_stats("nilai_flpp", "bank", limit=100000)
     if df.empty:
         return "FAIL", 0, None
-    df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
+    df["nilai_flpp"] = df["nilai_flpp"].apply(parse_rupiah)
     if df["nilai_flpp"].isna().all():
         return "WARN: nilai_flpp semua null\n(Kolom mungkin bernama berbeda di Supabase)", len(df), None
     by_bank = df.groupby("bank")["nilai_flpp"].sum().nlargest(5).reset_index()
@@ -652,7 +688,7 @@ def run_F5():
     df = fetch_numeric_stats("suku_bunga_kpr", limit=50000)
     if df.empty:
         return "FAIL", 0, None
-    df["suku_bunga_kpr"] = pd.to_numeric(df["suku_bunga_kpr"], errors="coerce")
+    df["suku_bunga_kpr"] = df["suku_bunga_kpr"].apply(parse_rupiah)
     if df["suku_bunga_kpr"].isna().all():
         debug = debug_kolom_numerik()
         return f"WARN: suku_bunga_kpr semua null\nDEBUG: {debug}", len(df), None
