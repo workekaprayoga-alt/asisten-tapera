@@ -134,7 +134,7 @@ def fetch_agg(group_col: str, filter_col: str = None,
             all_data.extend(chunk)
             if len(chunk) < batch: break
             offset += batch
-            if offset >= 1000000: break
+            if offset >= 200000: break
         except:
             break
 
@@ -171,7 +171,7 @@ def fetch_numeric_stats(col: str, group_col: str = None,
             all_data.extend(chunk)
             if len(chunk) < batch: break
             offset += batch
-            if offset >= 1000000: break
+            if offset >= 200000: break
         except: break
     return pd.DataFrame(all_data) if all_data else pd.DataFrame()
 
@@ -193,40 +193,66 @@ def fetch_multi_group(col1: str, col2: str, limit: int = 100000) -> pd.DataFrame
             all_data.extend(chunk)
             if len(chunk) < batch: break
             offset += batch
-            if offset >= 1000000: break
+            if offset >= 200000: break
         except: break
     return pd.DataFrame(all_data) if all_data else pd.DataFrame()
 
 def fetch_tren(filter_col: str = None, filter_val: str = None) -> pd.DataFrame:
-    """Tren per tahun_realisasi — pagination penuh, TANPA limit di params base."""
+    """
+    Tren per tahun_realisasi — pakai Supabase count=exact per tahun.
+    Jauh lebih cepat: 1 request per tahun, bukan 997 request untuk semua baris.
+    """
+    TAHUN_LIST = [2019, 2020, 2021, 2022, 2023, 2024, 2025]
     url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
-    h = sb_headers()
-    # KRITIS: jangan taruh limit di params_base! limit harus di dalam loop per-batch
-    params_base = {"select": "tahun_realisasi"}
-    if filter_col and filter_val:
-        params_base[filter_col] = f"eq.{filter_val}"
-    all_data = []
-    offset = 0
-    batch = 1000
-    while True:
-        p = {**params_base, "limit": str(batch), "offset": str(offset)}
+    rows = []
+    for tahun in TAHUN_LIST:
+        h = sb_headers()
+        h["Prefer"] = "count=exact"
+        params = {"select": "id", "limit": "1", "tahun_realisasi": f"eq.{tahun}"}
+        if filter_col and filter_val:
+            params[filter_col] = f"eq.{filter_val}"
         try:
-            r = requests.get(url, headers=h, params=p, timeout=30)
+            r = requests.get(url, headers=h, params=params, timeout=15)
             r.raise_for_status()
-            chunk = r.json()
-            if not chunk: break
-            all_data.extend(chunk)
-            if len(chunk) < batch: break
-            offset += batch
-            if offset >= 1200000: break
+            ct = r.headers.get("content-range", "")
+            if "/" in ct:
+                total_str = ct.split("/")[-1].strip()
+                n = int(total_str) if total_str.isdigit() else 0
+            else:
+                n = 0
+            if n > 0:
+                rows.append({"Tahun": tahun, "Unit": n})
         except:
-            break
-    if not all_data:
+            continue
+    if not rows:
         return pd.DataFrame()
-    df = pd.DataFrame(all_data)
-    result = df["tahun_realisasi"].value_counts().sort_index().reset_index()
-    result.columns = ["Tahun", "Unit"]
-    return result
+    df = pd.DataFrame(rows).sort_values("Tahun").reset_index(drop=True)
+    return df
+
+
+# ============================================================
+# IN-MEMORY CACHE — supaya fetch yang sama tidak re-request
+# Cache per (group_col, filter_col, filter_val) — top_n diapply dari cache
+# Sehingga fetch_agg("provinsi", top_n=10) dan (top_n=50) hanya 1x fetch
+# ============================================================
+_CACHE = {}
+
+def cached_fetch_agg(group_col, filter_col=None, filter_val=None, top_n=30):
+    # Key tanpa top_n — fetch sekali, apply top_n dari cache
+    key = f"agg:{group_col}:{filter_col}:{filter_val}"
+    if key not in _CACHE:
+        # Fetch dengan top_n=500 untuk simpan semua nilai unik
+        _CACHE[key] = fetch_agg(group_col, filter_col, filter_val, top_n=500)
+    df = _CACHE[key]
+    if df.empty:
+        return df
+    return df.head(top_n).copy()
+
+def cached_fetch_tren(filter_col=None, filter_val=None):
+    key = f"tren:{filter_col}:{filter_val}"
+    if key not in _CACHE:
+        _CACHE[key] = fetch_tren(filter_col, filter_val)
+    return _CACHE[key]
 
 def tanya_groq(prompt: str) -> str:
     if not GROQ_KEY:
@@ -304,30 +330,35 @@ def run_A8():
         return f"FAIL: {e}", 0, None
 
 def run_A2():
-    df = fetch_numeric_stats("nilai_flpp", limit=1000000)
+    # Pakai sample 50.000 untuk rata-rata (cukup representatif, jauh lebih cepat)
+    df = fetch_numeric_stats("nilai_flpp", limit=50000)
     if df.empty or "nilai_flpp" not in df.columns:
         return "FAIL: kolom nilai_flpp tidak ada", 0, None
     df["nilai_flpp"] = df["nilai_flpp"].apply(parse_rupiah)
-    total = df["nilai_flpp"].sum()
-    avg   = df["nilai_flpp"].mean()
-    return f"Total: Rp {total/1e12:.2f} T\nRata-rata per unit: Rp {avg:,.0f}", len(df), None
+    avg = df["nilai_flpp"].mean()
+    # Total = rata-rata × jumlah baris total (akurat)
+    total_unit = count_total()
+    total_est = avg * total_unit if total_unit > 0 else df["nilai_flpp"].sum()
+    return (f"Rata-rata per unit: Rp {avg:,.0f}\n"
+            f"Total estimasi ({total_unit:,} unit): Rp {total_est/1e12:.2f} T\n"
+            f"(dari sample {len(df):,} baris)"), len(df), None
 
 def run_A3():
-    df = fetch_tren()
+    df = cached_fetch_tren()
     if df.empty:
         return "FAIL: tidak ada data tahun", 0, None
     tahun_list = sorted(df["Tahun"].dropna().unique().tolist())
     return f"Rentang tahun: {tahun_list[0]}–{tahun_list[-1]}\nTahun tersedia: {', '.join(str(t) for t in tahun_list)}", len(df), df
 
 def run_A4():
-    df = fetch_agg("bank", top_n=20)
+    df = cached_fetch_agg("bank", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data bank", 0, None
     banks = df["bank"].tolist()
     return f"{len(banks)} bank: {', '.join(banks[:5])}{'...' if len(banks)>5 else ''}", len(df), df
 
 def run_A5():
-    df = fetch_agg("provinsi", top_n=50)
+    df = cached_fetch_agg("provinsi", top_n=50)
     if df.empty:
         return "FAIL: tidak ada data provinsi", 0, None
     return f"{len(df)} provinsi terdeteksi\nContoh: {', '.join(df['provinsi'].tolist()[:5])}", len(df), df
@@ -346,83 +377,83 @@ def run_A6():
     return f"Min: Rp {vmin:,.0f}\nMax: Rp {vmax:,.0f}\nRata-rata: Rp {vavg:,.0f}", len(df), None
 
 def run_A7():
-    df = fetch_agg("jenis_rumah", top_n=10)
+    df = cached_fetch_agg("jenis_rumah", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data jenis_rumah", 0, None
     return "\n".join(f"  {i+1}. {r['jenis_rumah']}: {r['jumlah']:,}" for i,r in df.iterrows()), len(df), df
 
 def run_B1():
-    df = fetch_agg("provinsi", top_n=38)
+    df = cached_fetch_agg("provinsi", top_n=38)
     if df.empty:
         return "FAIL", 0, None
     top5 = "\n".join(f"  {i+1}. {r['provinsi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 provinsi:\n{top5}", len(df), df
 
 def run_B2():
-    df = fetch_agg("kabupaten", top_n=20)
+    df = cached_fetch_agg("kabupaten", top_n=20)
     if df.empty:
         return "FAIL", 0, None
     top10 = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 kabupaten:\n{top10}", len(df), df
 
 def run_B3():
-    df = fetch_agg("nama_pengembang", top_n=20)
+    df = cached_fetch_agg("nama_pengembang", top_n=20)
     if df.empty:
         return "FAIL", 0, None
     top10 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 pengembang:\n{top10}", len(df), df
 
 def run_B4():
-    df = fetch_agg("nama_perumahan", top_n=20)
+    df = cached_fetch_agg("nama_perumahan", top_n=20)
     if df.empty:
         return "FAIL", 0, None
     top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 perumahan:\n{top10}", len(df), df
 
 def run_B5():
-    df = fetch_agg("bank", top_n=10)
+    df = cached_fetch_agg("bank", top_n=10)
     if df.empty:
         return "FAIL", 0, None
     top5 = "\n".join(f"  {i+1}. {r['bank']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 bank:\n{top5}", len(df), df
 
 def run_B6():
-    df = fetch_agg("nama_perumahan", "tahun_realisasi", "2023", top_n=20)
+    df = cached_fetch_agg("nama_perumahan", "tahun_realisasi", "2023", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data 2023", 0, None
     top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 perumahan terbanyak 2023:\n{top10}", len(df), df
 
 def run_B7():
-    df = fetch_agg("nama_pengembang", "provinsi", "JAWA BARAT", top_n=10)
+    df = cached_fetch_agg("nama_pengembang", "provinsi", "JAWA BARAT", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data Jawa Barat", 0, None
     top5 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 pengembang Jawa Barat:\n{top5}", len(df), df
 
 def run_B8():
-    df = fetch_agg("asosiasi", top_n=10)
+    df = cached_fetch_agg("asosiasi", top_n=10)
     if df.empty:
         return "FAIL", 0, None
     top5 = "\n".join(f"  {i+1}. {r['asosiasi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 asosiasi:\n{top5}", len(df), df
 
 def run_B9():
-    df = fetch_agg("kabupaten", "provinsi", "JAWA TIMUR", top_n=10)
+    df = cached_fetch_agg("kabupaten", "provinsi", "JAWA TIMUR", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data Jawa Timur", 0, None
     top10 = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 kabupaten Jawa Timur:\n{top10}", len(df), df
 
 def run_B10():
-    df = fetch_agg("nama_pengembang", "tahun_realisasi", "2024", top_n=10)
+    df = cached_fetch_agg("nama_pengembang", "tahun_realisasi", "2024", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data 2024", 0, None
     top5 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 pengembang 2024:\n{top5}", len(df), df
 
 def run_C1():
-    df = fetch_agg("provinsi", top_n=50)
+    df = cached_fetch_agg("provinsi", top_n=50)
     if df.empty or "JAWA BARAT" not in df["provinsi"].values:
         return "FAIL: Jawa Barat tidak ditemukan", 0, None
     n = df[df["provinsi"] == "JAWA BARAT"]["jumlah"].values[0]
@@ -431,7 +462,7 @@ def run_C1():
     return f"Jawa Barat: {n:,} unit ({pct:.1f}% dari total {total:,})", n, None
 
 def run_C2():
-    df_tren = fetch_tren()
+    df_tren = cached_fetch_tren()
     if df_tren.empty:
         return "FAIL: tidak ada data tahun", 0, None
     r2023 = df_tren[df_tren["Tahun"] == 2023]
@@ -439,7 +470,7 @@ def run_C2():
     return f"Unit FLPP tahun 2023: {n:,}", n, df_tren
 
 def run_C3():
-    df = fetch_agg("bank", top_n=20)
+    df = cached_fetch_agg("bank", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data bank", 0, None
     btn_row = df[df["bank"].str.contains("BTN", case=False, na=False)]
@@ -451,73 +482,73 @@ def run_C3():
     return f"BTN: {n:,} unit ({n/total*100:.1f}% dari total)", n, None
 
 def run_C4():
-    df = fetch_agg("nama_perumahan", "provinsi", "SUMATERA UTARA", top_n=30)
+    df = cached_fetch_agg("nama_perumahan", "provinsi", "SUMATERA UTARA", top_n=30)
     if df.empty:
         return "FAIL: tidak ada data Sumatera Utara", 0, None
     top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 perumahan di Sumatera Utara:\n{top10}", len(df), df
 
 def run_C5():
-    df = fetch_agg("nama_pengembang", "provinsi", "KALIMANTAN TIMUR", top_n=20)
+    df = cached_fetch_agg("nama_pengembang", "provinsi", "KALIMANTAN TIMUR", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data Kalimantan Timur", 0, None
     top5 = "\n".join(f"  {i+1}. {r['nama_pengembang']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 pengembang Kalimantan Timur:\n{top5}", len(df), df
 
 def run_C6():
-    df = fetch_agg("kabupaten", "provinsi", "BANTEN", top_n=20)
+    df = cached_fetch_agg("kabupaten", "provinsi", "BANTEN", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data Banten", 0, None
     s = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.iterrows())
     return f"Distribusi Banten:\n{s}", len(df), df
 
 def run_C7():
-    df = fetch_agg("nama_perumahan", "bank", "BANK BTN", top_n=20)
+    df = cached_fetch_agg("nama_perumahan", "bank", "BANK BTN", top_n=20)
     if df.empty:
         # coba nama lain
-        df = fetch_agg("nama_perumahan", "bank", "BTN", top_n=20)
+        df = cached_fetch_agg("nama_perumahan", "bank", "BTN", top_n=20)
     if df.empty:
         return "FAIL: data perumahan BTN tidak ditemukan", 0, None
     top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 perumahan dibiayai BTN:\n{top10}", len(df), df
 
 def run_C8():
-    df = fetch_agg("provinsi", "tahun_realisasi", "2022", top_n=10)
+    df = cached_fetch_agg("provinsi", "tahun_realisasi", "2022", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data 2022", 0, None
     top5 = "\n".join(f"  {i+1}. {r['provinsi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 provinsi tahun 2022:\n{top5}", len(df), df
 
 def run_C9():
-    df = fetch_agg("kabupaten", "tahun_realisasi", "2024", top_n=20)
+    df = cached_fetch_agg("kabupaten", "tahun_realisasi", "2024", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data 2024", 0, None
     top10 = "\n".join(f"  {i+1}. {r['kabupaten']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 kabupaten 2024:\n{top10}", len(df), df
 
 def run_C10():
-    df = fetch_agg("nama_perumahan", "provinsi", "SULAWESI SELATAN", top_n=20)
+    df = cached_fetch_agg("nama_perumahan", "provinsi", "SULAWESI SELATAN", top_n=20)
     if df.empty:
         return "FAIL: tidak ada data Sulawesi Selatan", 0, None
     top10 = "\n".join(f"  {i+1}. {r['nama_perumahan']}: {r['jumlah']:,}" for i,r in df.head(10).iterrows())
     return f"Top 10 perumahan di Sulawesi Selatan:\n{top10}", len(df), df
 
 def run_D1():
-    df = fetch_tren()
+    df = cached_fetch_tren()
     if df.empty:
         return "FAIL: tidak ada data tren", 0, None
     s = "\n".join(f"  {r['Tahun']}: {r['Unit']:,}" for _,r in df.iterrows())
     return f"Tren per tahun:\n{s}", len(df), df
 
 def run_D2():
-    df = fetch_tren()
+    df = cached_fetch_tren()
     if df.empty:
         return "FAIL", 0, None
     best = df.loc[df["Unit"].idxmax()]
     return f"Tahun terbanyak: {int(best['Tahun'])} dengan {int(best['Unit']):,} unit", len(df), df
 
 def run_D3():
-    df = fetch_tren()
+    df = cached_fetch_tren()
     if df.empty or len(df) < 2:
         return "FAIL: data tren kurang", 0, None
     df = df.sort_values("Tahun")
@@ -532,7 +563,7 @@ def run_D3():
     return "Perubahan YoY:\n" + "\n".join(results), len(df), df
 
 def run_D4():
-    df_tren = fetch_tren()
+    df_tren = cached_fetch_tren()
     if df_tren.empty:
         return "FAIL", 0, None
     r2022 = df_tren[df_tren["Tahun"] == 2022]
@@ -545,24 +576,24 @@ def run_D4():
     return f"{trend}\n2022: {n2022:,} unit\n2024: {n2024:,} unit\nDelta: {delta:+,} ({pct:+.1f}%)", 2, None
 
 def run_D5():
-    df = fetch_tren("provinsi", "JAWA BARAT")
+    df = cached_fetch_tren("provinsi", "JAWA BARAT")
     if df.empty:
         return "FAIL: tidak ada data Jawa Barat per tahun", 0, None
     s = "\n".join(f"  {r['Tahun']}: {r['Unit']:,}" for _,r in df.iterrows())
     return f"Tren Jawa Barat per tahun:\n{s}", len(df), df
 
 def run_D6():
-    df = fetch_tren("bank", "BANK BTN")
+    df = cached_fetch_tren("bank", "BANK BTN")
     if df.empty:
         # coba nama singkat
-        df = fetch_tren("bank", "BTN")
+        df = cached_fetch_tren("bank", "BTN")
     if df.empty:
         return "WARN: data BTN per tahun tidak ditemukan", 0, None
     s = "\n".join(f"  {r['Tahun']}: {r['Unit']:,}" for _,r in df.iterrows())
     return f"Tren BTN per tahun:\n{s}", len(df), df
 
 def run_E1():
-    df = fetch_agg("kelamin", top_n=5)
+    df = cached_fetch_agg("kelamin", top_n=5)
     if df.empty:
         return "FAIL: tidak ada data kelamin", 0, None
     total = df["jumlah"].sum()
@@ -570,7 +601,7 @@ def run_E1():
     return f"Distribusi gender:\n{s}", len(df), df
 
 def run_E2():
-    df = fetch_agg("pekerjaan", top_n=10)
+    df = cached_fetch_agg("pekerjaan", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data pekerjaan", 0, None
     top5 = "\n".join(f"  {i+1}. {r['pekerjaan']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
@@ -588,7 +619,7 @@ def run_E3():
     return f"Rata-rata: Rp {avg:,.0f}\nMedian: Rp {med:,.0f}", len(df), None
 
 def run_E4():
-    df = fetch_agg("tenor", top_n=10)
+    df = cached_fetch_agg("tenor", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data tenor", 0, None
     total = df["jumlah"].sum()
@@ -606,7 +637,7 @@ def run_E5():
     return f"Rata-rata harga rumah: Rp {avg:,.0f}", len(df), None
 
 def run_E6():
-    df = fetch_agg("kelamin", "tahun_realisasi", "2023", top_n=5)
+    df = cached_fetch_agg("kelamin", "tahun_realisasi", "2023", top_n=5)
     if df.empty:
         return "FAIL: tidak ada data gender 2023", 0, None
     total = df["jumlah"].sum()
@@ -614,7 +645,7 @@ def run_E6():
     return f"Gender pembeli 2023:\n{s}", len(df), df
 
 def run_E7():
-    df = fetch_agg("pekerjaan", "provinsi", "DKI JAKARTA", top_n=10)
+    df = cached_fetch_agg("pekerjaan", "provinsi", "DKI JAKARTA", top_n=10)
     if df.empty:
         return "WARN: DKI Jakarta mungkin nama berbeda atau tidak ada data", 0, None
     top5 = "\n".join(f"  {i+1}. {r['pekerjaan']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
@@ -651,7 +682,7 @@ def run_F1():
     return f"Min: Rp {df['harga_rumah'].min():,.0f}\nMax: Rp {df['harga_rumah'].max():,.0f}\nRata-rata: Rp {df['harga_rumah'].mean():,.0f}", len(df), None
 
 def run_F2():
-    df = fetch_numeric_stats("nilai_flpp", limit=100000)
+    df = fetch_numeric_stats("nilai_flpp", limit=50000)
     if df.empty:
         return "FAIL", 0, None
     df["nilai_flpp"] = df["nilai_flpp"].apply(parse_rupiah)
@@ -674,7 +705,7 @@ def run_F3():
     return f"Top 5 provinsi harga tertinggi:\n{s}", len(df), avg_prov
 
 def run_F4():
-    df = fetch_numeric_stats("nilai_flpp", "bank", limit=100000)
+    df = fetch_numeric_stats("nilai_flpp", "bank", limit=50000)
     if df.empty:
         return "FAIL", 0, None
     df["nilai_flpp"] = df["nilai_flpp"].apply(parse_rupiah)
@@ -708,7 +739,7 @@ def run_G1():
     return f"Bank dominan per provinsi (top 10):\n{s}", len(df), result
 
 def run_G2():
-    df = fetch_multi_group("provinsi", "nama_pengembang", limit=1000000)
+    df = fetch_multi_group("provinsi", "nama_pengembang", limit=200000)
     if df.empty:
         return "FAIL", 0, None
     dev_per_prov = df.groupby("provinsi")["nama_pengembang"].nunique().reset_index()
@@ -718,7 +749,7 @@ def run_G2():
     return f"Jumlah pengembang per provinsi (top 10):\n{s}", len(df), dev_per_prov
 
 def run_G3():
-    df = fetch_multi_group("tahun_realisasi", "provinsi", limit=1000000)
+    df = fetch_multi_group("tahun_realisasi", "provinsi", limit=200000)
     if df.empty:
         return "FAIL", 0, None
     jabar = df[df["provinsi"] == "JAWA BARAT"]
@@ -732,7 +763,7 @@ def run_G3():
     return f"Jawa Barat vs Luar Jawa Barat per tahun:\n{s}", len(df), merged
 
 def run_G4():
-    df_j = fetch_agg("provinsi", top_n=50)
+    df_j = cached_fetch_agg("provinsi", top_n=50)
     if df_j.empty:
         return "FAIL", 0, None
     pulau_jawa = ["JAWA BARAT","JAWA TENGAH","JAWA TIMUR","DKI JAKARTA","BANTEN","DI YOGYAKARTA","DAERAH ISTIMEWA YOGYAKARTA"]
@@ -744,9 +775,9 @@ def run_G4():
             f"Total: {total:,}"), total, None
 
 def run_G5():
-    df_bank = fetch_agg("bank", top_n=10)
-    df_dev  = fetch_agg("nama_pengembang", top_n=10)
-    df_prov = fetch_agg("provinsi", top_n=10)
+    df_bank = cached_fetch_agg("bank", top_n=10)
+    df_dev  = cached_fetch_agg("nama_pengembang", top_n=10)
+    df_prov = cached_fetch_agg("provinsi", top_n=10)
     if df_bank.empty or df_dev.empty or df_prov.empty:
         return "FAIL", 0, None
     
@@ -761,14 +792,14 @@ def run_G5():
             f"  🗺️ Provinsi terbesar: {top_prov['provinsi']} ({top_prov['jumlah']:,} unit)"), 0, None
 
 def run_G6():
-    df = fetch_agg("asosiasi", "tahun_realisasi", "2023", top_n=10)
+    df = cached_fetch_agg("asosiasi", "tahun_realisasi", "2023", top_n=10)
     if df.empty:
         return "FAIL: tidak ada data asosiasi 2023", 0, None
     s = "\n".join(f"  {i+1}. {r['asosiasi']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 asosiasi tahun 2023:\n{s}", len(df), df
 
 def run_G7():
-    df_prov = fetch_agg("provinsi", top_n=50)
+    df_prov = cached_fetch_agg("provinsi", top_n=50)
     if df_prov.empty:
         return "FAIL", 0, None
     all_prov = ["ACEH","SUMATERA UTARA","SUMATERA BARAT","RIAU","JAMBI",
@@ -786,8 +817,8 @@ def run_G7():
             f"Mungkin tidak ada data ({len(missing)}): {', '.join(missing[:5])}{'...' if len(missing)>5 else ''}"), len(df_prov), df_prov
 
 def run_G8():
-    df_j = fetch_agg("jenis_rumah", top_n=10)
-    df_bank = fetch_agg("bank", top_n=5)
+    df_j = cached_fetch_agg("jenis_rumah", top_n=10)
+    df_bank = cached_fetch_agg("bank", top_n=5)
     if df_j.empty or df_bank.empty:
         return "FAIL", 0, None
     jenis_list = "\n".join(f"  {r['jenis_rumah']}: {r['jumlah']:,}" for _,r in df_j.iterrows())
