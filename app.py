@@ -54,16 +54,27 @@ def sb_headers():
     }
 
 def count_total() -> int:
-    h = sb_headers()
-    h["Prefer"] = "count=exact"
+    """Hitung total baris via content-range header Supabase."""
     try:
+        h = sb_headers()
+        h["Prefer"] = "count=exact"
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}",
-            headers=h, params={"select": "id", "limit": "1"}, timeout=15
+            headers=h,
+            params={"select": "id", "limit": "1"},
+            timeout=15
         )
-        ct = r.headers.get("content-range", "0/0")
-        return int(ct.split("/")[-1]) if "/" in ct else 0
-    except:
+        r.raise_for_status()
+        # content-range format: "0-0/997000" -> ambil angka setelah /
+        ct = r.headers.get("content-range", "")
+        if "/" in ct:
+            total = ct.split("/")[-1].strip()
+            if total != "*" and total.isdigit():
+                return int(total)
+        # Fallback: coba header X-Total-Count
+        xtotal = r.headers.get("X-Total-Count", "0")
+        return int(xtotal) if xtotal.isdigit() else 0
+    except Exception as e:
         return 0
 
 def fetch_agg(group_col: str, filter_col: str = None,
@@ -152,24 +163,27 @@ def fetch_multi_group(col1: str, col2: str, limit: int = 100000) -> pd.DataFrame
     return pd.DataFrame(all_data) if all_data else pd.DataFrame()
 
 def fetch_tren(filter_col: str = None, filter_val: str = None) -> pd.DataFrame:
-    """Tren per tahun_realisasi."""
+    """Tren per tahun_realisasi — pagination penuh, TANPA limit di params base."""
     url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
     h = sb_headers()
-    params = {"select": "tahun_realisasi", "limit": "1000000"}
+    # KRITIS: jangan taruh limit di params_base! limit harus di dalam loop per-batch
+    params_base = {"select": "tahun_realisasi"}
     if filter_col and filter_val:
-        params[filter_col] = f"eq.{filter_val}"
+        params_base[filter_col] = f"eq.{filter_val}"
     all_data = []
     offset = 0
+    batch = 10000
     while True:
-        p = {**params, "offset": str(offset)}
+        p = {**params_base, "limit": str(batch), "offset": str(offset)}
         try:
             r = requests.get(url, headers=h, params=p, timeout=30)
             r.raise_for_status()
             chunk = r.json()
             if not chunk: break
             all_data.extend(chunk)
-            if len(chunk) < 10000: break
-            offset += 10000
+            if len(chunk) < batch: break
+            offset += batch
+            if offset >= 1200000: break
         except:
             break
     if not all_data:
@@ -179,15 +193,15 @@ def fetch_tren(filter_col: str = None, filter_val: str = None) -> pd.DataFrame:
     result.columns = ["Tahun", "Unit"]
     return result
 
-def tanya_deepseek(prompt: str) -> str:
+def tanya_groq(prompt: str) -> str:
     if not GROQ_KEY:
         return "—"
     try:
         r = requests.post(
-            "https://api.deepseek.com/chat/completions",
+            "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_KEY}",
                      "Content-Type": "application/json"},
-            json={"model": "deepseek-chat",
+            json={"model": "llama-3.3-70b-versatile",
                   "messages": [
                       {"role": "system", "content":
                        "Kamu analis data FLPP. Jawab singkat dan akurat dalam bahasa Indonesia. "
@@ -210,6 +224,49 @@ def tanya_deepseek(prompt: str) -> str:
 def run_A1():
     n = count_total()
     return f"Total: {n:,} unit", n, None
+
+def run_A1b():
+    """Fallback count: hitung via pagination manual kalau count_total = 0."""
+    n = count_total()
+    if n > 0:
+        return f"✅ count_total OK: {n:,} unit", n, None
+    # Fallback: tarik id saja dan hitung
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    h = sb_headers()
+    total = 0
+    offset = 0
+    batch = 10000
+    while True:
+        p = {"select": "id", "limit": str(batch), "offset": str(offset)}
+        try:
+            r = requests.get(url, headers=h, params=p, timeout=30)
+            r.raise_for_status()
+            chunk = r.json()
+            total += len(chunk)
+            if len(chunk) < batch: break
+            offset += batch
+            if offset >= 1200000: break
+        except: break
+    return f"⚠️ count_total=0 (bug Prefer header), fallback pagination: {total:,} unit", total, None
+
+def run_A8():
+    """Debug: tampilkan nama kolom asli dan sample nilai dari Supabase."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    h = sb_headers()
+    try:
+        r = requests.get(url, headers=h, params={"limit": "3"}, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        if not data:
+            return "FAIL: tidak ada data sama sekali", 0, None
+        cols = list(data[0].keys())
+        # Tampilkan semua kolom dan nilai baris pertama
+        sample_lines = []
+        for k, v in data[0].items():
+            sample_lines.append(f"  {k}: {repr(v)}")
+        return f"Semua kolom ({len(cols)}):\n{chr(10).join(sample_lines)}", len(data), None
+    except Exception as e:
+        return f"FAIL: {e}", 0, None
 
 def run_A2():
     df = fetch_numeric_stats("nilai_flpp", limit=1000000)
@@ -527,13 +584,34 @@ def run_E7():
     top5 = "\n".join(f"  {i+1}. {r['pekerjaan']}: {r['jumlah']:,}" for i,r in df.head(5).iterrows())
     return f"Top 5 pekerjaan di DKI Jakarta:\n{top5}", len(df), df
 
+def debug_kolom_numerik() -> str:
+    """Ambil 3 baris data untuk cek nama kolom & sample nilai aktual."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    h = sb_headers()
+    try:
+        r = requests.get(url, headers=h, params={"limit": "3"}, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        if not data:
+            return "Tidak ada data"
+        cols = list(data[0].keys())
+        # Cari kolom yang kemungkinan numerik
+        num_cols = [c for c in cols if any(k in c.lower() for k in
+                    ["harga","nilai","flpp","bunga","penghasilan","suku","kredit","uang"])]
+        sample = data[0]
+        sample_str = "\n".join(f"  {k}: {v}" for k,v in sample.items() if k in num_cols)
+        return f"Kolom numerik ditemukan: {num_cols}\nSample baris 1:\n{sample_str}\nSemua kolom: {cols}"
+    except Exception as e:
+        return f"Error debug: {e}"
+
 def run_F1():
     df = fetch_numeric_stats("harga_rumah", limit=50000)
     if df.empty:
         return "FAIL", 0, None
     df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce")
     if df["harga_rumah"].isna().all():
-        return "WARN: harga_rumah semua null", len(df), None
+        debug = debug_kolom_numerik()
+        return f"WARN: harga_rumah semua null\nDEBUG: {debug}", len(df), None
     return f"Min: Rp {df['harga_rumah'].min():,.0f}\nMax: Rp {df['harga_rumah'].max():,.0f}\nRata-rata: Rp {df['harga_rumah'].mean():,.0f}", len(df), None
 
 def run_F2():
@@ -542,7 +620,8 @@ def run_F2():
         return "FAIL", 0, None
     df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
     if df["nilai_flpp"].isna().all():
-        return "WARN: nilai_flpp semua null", len(df), None
+        debug = debug_kolom_numerik()
+        return f"WARN: nilai_flpp semua null\nDEBUG: {debug}", len(df), None
     avg = df["nilai_flpp"].mean()
     total = df["nilai_flpp"].sum()
     return f"Rata-rata per unit: Rp {avg:,.0f}\nTotal ({len(df):,} sample): Rp {total/1e12:.2f}T", len(df), None
@@ -553,7 +632,7 @@ def run_F3():
         return "FAIL", 0, None
     df["harga_rumah"] = pd.to_numeric(df["harga_rumah"], errors="coerce")
     if df["harga_rumah"].isna().all():
-        return "WARN: harga_rumah semua null", len(df), None
+        return "WARN: harga_rumah semua null\n(Kolom mungkin bernama berbeda di Supabase)", len(df), None
     avg_prov = df.groupby("provinsi")["harga_rumah"].mean().nlargest(5).reset_index()
     s = "\n".join(f"  {i+1}. {r['provinsi']}: Rp {r['harga_rumah']:,.0f}" for i,r in avg_prov.iterrows())
     return f"Top 5 provinsi harga tertinggi:\n{s}", len(df), avg_prov
@@ -564,7 +643,7 @@ def run_F4():
         return "FAIL", 0, None
     df["nilai_flpp"] = pd.to_numeric(df["nilai_flpp"], errors="coerce")
     if df["nilai_flpp"].isna().all():
-        return "WARN: nilai_flpp semua null", len(df), None
+        return "WARN: nilai_flpp semua null\n(Kolom mungkin bernama berbeda di Supabase)", len(df), None
     by_bank = df.groupby("bank")["nilai_flpp"].sum().nlargest(5).reset_index()
     s = "\n".join(f"  {i+1}. {r['bank']}: Rp {r['nilai_flpp']/1e12:.2f}T" for i,r in by_bank.iterrows())
     return f"Nilai kredit per bank (top 5):\n{s}", len(df), by_bank
@@ -575,7 +654,8 @@ def run_F5():
         return "FAIL", 0, None
     df["suku_bunga_kpr"] = pd.to_numeric(df["suku_bunga_kpr"], errors="coerce")
     if df["suku_bunga_kpr"].isna().all():
-        return "WARN: suku_bunga_kpr semua null", len(df), None
+        debug = debug_kolom_numerik()
+        return f"WARN: suku_bunga_kpr semua null\nDEBUG: {debug}", len(df), None
     avg = df["suku_bunga_kpr"].mean()
     vmin = df["suku_bunga_kpr"].min()
     vmax = df["suku_bunga_kpr"].max()
@@ -684,6 +764,8 @@ def run_G8():
 TESTS = [
     # A — ANGKA DASAR
     ("A1","A. Angka Dasar","Berapa total unit FLPP yang sudah terealisasi?", run_A1),
+    ("A1b","A. Angka Dasar","[Debug] Count fallback via pagination (jika A1=0)", run_A1b),
+    ("A8","A. Angka Dasar","[Debug] Nama kolom asli & sample nilai dari Supabase", run_A8),
     ("A2","A. Angka Dasar","Berapa total nilai kredit FLPP (Rp) dan rata-rata per unit?", run_A2),
     ("A3","A. Angka Dasar","Data tersedia dari tahun berapa sampai tahun berapa?", run_A3),
     ("A4","A. Angka Dasar","Ada berapa bank pelaksana FLPP dalam data ini?", run_A4),
@@ -761,7 +843,7 @@ st.divider()
 col_opt1, col_opt2, col_opt3, col_opt4 = st.columns(4)
 with col_opt1:
     run_ai = st.checkbox("Jalankan AI Groq per tes", value=False,
-                         help="Centang untuk dapat jawaban AI. Lebih lambat tapi lebih informatif.")
+                         help="Centang untuk dapat jawaban AI via Groq. Lebih lambat tapi lebih informatif.")
 with col_opt2:
     cat_filter = st.multiselect("Filter kategori:",
                                 ["A. Angka Dasar","B. Ranking & Top-N","C. Filter Spesifik",
@@ -817,7 +899,7 @@ if st.button("▶️ Jalankan Semua Tes", type="primary", use_container_width=Tr
                 
                 # Jalankan AI jika diminta dan status bukan FAIL
                 if run_ai and status in ["PASS"] and ringkasan:
-                    ai_jawaban = tanya_deepseek(
+                    ai_jawaban = tanya_groq(
                         f"Pertanyaan: {q}\n\nData:\n{ringkasan}\n\nJawab singkat dan akurat."
                     )
                     
